@@ -1,0 +1,89 @@
+import json
+import scripts.util as util
+import scripts.database as database
+
+configfile: "config.yaml"
+
+printlog = util.setup_logger()
+
+GH_SEARCH_START_DATE_STR = config["gh_search_start_date"]
+GH_SEARCH_START_DATE     = util.str_to_date(GH_SEARCH_START_DATE_STR)
+GH_SEARCH_END_DATE_STR   = config["gh_search_end_date"]
+GH_SEARCH_END_DATE       = util.str_to_date(GH_SEARCH_END_DATE_STR)
+GH_SEARCH_INTERVAL       = config["gh_search_interval"]
+GH_SEARCH_QUERY          = config["gh_search_query"]
+WORKDIR = config["result_dir"] + f"/{GH_SEARCH_START_DATE_STR}_{GH_SEARCH_END_DATE_STR}"
+NOW     = util.now()
+
+github_search_date_ranges = util.generate_date_ranges(GH_SEARCH_START_DATE, GH_SEARCH_END_DATE, GH_SEARCH_INTERVAL)
+START_DATES = [date_range[0] for date_range in github_search_date_ranges]
+END_DATES   = [date_range[1] for date_range in github_search_date_ranges]
+printlog.debug(f"GitHub search date ranges: {github_search_date_ranges}")
+printlog.debug(f"GitHub search start dates: {START_DATES}")
+printlog.debug(f"GitHub search end dates: {END_DATES}")
+
+rule store_metadata_in_database:
+    input:
+        expand(WORKDIR + "/gh_search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES)
+    output:
+        WORKDIR + "/.done_storing_metadata"
+    run:
+        db = database.Database(engine=config["database"]["engine"], logger=printlog)
+        for input_file in input:
+            with open(input_file, 'r') as f:
+                json_data = json.load(f)
+                db.store_github_repository_search_results(json_data)
+        db.close()
+
+        # create .done_storing_metadata file
+        with open(output[0], 'w') as f:
+            f.write("")
+
+rule search_github_repositories:
+   input:
+       WORKDIR + "/gh_search_queries.txt"
+   output:
+       expand(WORKDIR + "/gh_search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES)
+   run:
+       json_data = None
+       with open(input[0], 'r') as f:
+           for line in f:
+               query_string = line.strip()
+               date_range = query_string.split("created:")[1].split("..")
+               start_date = date_range[0]
+               end_date   = date_range[1]
+
+               printlog.debug(f"[{rule}] Searching GitHub repositories with query: {query_string}")
+               json_data = json.loads(os.popen(f"gh api -X GET search/repositories -f q='{query_string}' --paginate --slurp").read())
+
+               # Get ratelimit from the response.
+               output_file = f"{WORKDIR}/gh_search_query_result_{start_date}_{end_date}.json"
+               current_rate_limit = json.loads(os.popen("gh api -X GET rate_limit").read())
+               printlog.info(f"[{rule}] Rate limit remaining: {current_rate_limit['resources']['search']}")
+
+               with open(output_file, 'w') as f:
+                   json.dump(json_data, f, indent=4)
+
+rule generate_github_search_queries:
+   input:
+       WORKDIR + "/.initialized"
+   output:
+       WORKDIR + "/gh_search_queries.txt"
+   params:
+       dates=github_search_date_ranges
+   run:
+       with open(output[0], 'w') as f:
+           for date_range in params.dates:
+               # snakemake workflow in:readme archived:false created:2024-11-01..2024-12-31
+               query_string = f"{GH_SEARCH_QUERY} created:{date_range[0]}..{date_range[1]}"
+               f.write(f"{query_string}\n")
+
+rule make_work_directory:
+   """ make a work directory as ./results/{START_DATE}_{END_DATE} """
+   output:
+       WORKDIR + "/.initialized"
+   run:
+       os.makedirs(f"results/{GH_SEARCH_START_DATE}_{GH_SEARCH_END_DATE}", exist_ok=True)
+       # create .initialized file in the directory.
+       with open(output[0], 'w') as f:
+           f.write("")
