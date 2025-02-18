@@ -19,7 +19,6 @@ NOW     = util.now()
 github_search_date_ranges = util.generate_date_ranges(GIT_SEARCH_START_DATE, GIT_SEARCH_END_DATE, GIT_SEARCH_INTERVAL)
 START_DATES = [date_range[0] for date_range in github_search_date_ranges]
 END_DATES   = [date_range[1] for date_range in github_search_date_ranges]
-printlog.debug(f"GitHub search date ranges: {github_search_date_ranges}")
 printlog.debug(f"GitHub search start dates: {START_DATES}")
 printlog.debug(f"GitHub search end dates: {END_DATES}")
 
@@ -59,18 +58,11 @@ rule search_github_repositories:
                start_date = date_range[0]
                end_date   = date_range[1]
 
-               printlog.debug(f"[{rule}] Searching GitHub repositories with query: {query_string}")
-               json_data = git_provider.search_repositories(query=query_string)
-               # json_data = json.loads(os.popen(f"gh api -X GET search/repositories -f q='{query_string}' --paginate --slurp").read())
+               result = git_provider.search_repositories(query=query_string)
 
-               # Get ratelimit from the response.
                output_file = f"{WORKDIR}/github_search_query_result_{start_date}_{end_date}.json"
-               current_rate_limit = git_provider.get_rate_limit()
-               # current_rate_limit = json.loads(os.popen("gh api -X GET rate_limit").read())
-               # printlog.info(f"[{rule}] Rate limit remaining: {current_rate_limit['resources']['search']}")
-
                with open(output_file, 'w') as f:
-                   json.dump(json_data, f, indent=4)
+                   json.dump(result, f, indent=4)
 
 rule generate_github_search_queries:
    input:

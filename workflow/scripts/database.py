@@ -66,7 +66,7 @@ class Neo4jDriver(DatabaseDriverBase):
 
 
     def store_github_repository_search_results(self, data):
-        self.log.debug(f"data: {data}")
+        #self.log.debug(f"data: {data}")
         pass
 
 
