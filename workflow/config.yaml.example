@@ -14,9 +14,10 @@ database_config:
 database:
   engine: neo4j
 
-gh_search_start_date: "2024-01-01"
-gh_search_end_date: "2024-02-05"
-gh_search_interval: "m"
-gh_search_query: "snakemake workflow in:readme archived:false"
+git_provider: "github"
+git_provider_token: "xxxxxxxxx"
+search_start_date: "2025-01-01"
+search_end_date: "2025-02-19"
+search_interval: "m"
+search_query: "snakemake workflow in:readme archived:false"
 result_dir: "results"
-
