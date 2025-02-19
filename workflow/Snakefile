@@ -22,6 +22,7 @@ END_DATES   = [date_range[1] for date_range in github_search_date_ranges]
 printlog.debug(f"GitHub search start dates: {START_DATES}")
 printlog.debug(f"GitHub search end dates: {END_DATES}")
 
+
 rule store_metadata_in_database:
     input:
         expand(WORKDIR + "/github_search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES)
@@ -39,51 +40,65 @@ rule store_metadata_in_database:
         with open(output[0], 'w') as f:
             f.write("")
 
+
 rule search_github_repositories:
-   input:
-       WORKDIR + "/github_search_queries.txt"
-   output:
-       expand(WORKDIR + "/github_search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES)
-   run:
-       json_data = None
-       git_provider = git_providers.GitProvider(
-               provider=config["git_provider"],
-               token=config["git_provider_token"],
-               logger=printlog)
+    input:
+        WORKDIR + "/github_search_queries.txt"
+    output:
+        WORKDIR + "/.done_search_github_repositories"
+    run:
+        json_data = None
+        git_provider = git_providers.GitProvider(
+                provider=config["git_provider"],
+                token=config["git_provider_token"],
+                logger=printlog)
 
-       with open(input[0], 'r') as f:
-           for line in f:
-               query_string = line.strip()
-               date_range = query_string.split("created:")[1].split("..")
-               start_date = date_range[0]
-               end_date   = date_range[1]
+        with open(input[0], 'r') as f:
+            for line in f:
+                query_string = line.strip()
+                date_range  = query_string.split("created:")[1].split("..")
+                start_date  = date_range[0]
+                end_date    = date_range[1]
+                output_file = f"{WORKDIR}/github_search_query_result_{start_date}_{end_date}.json"
 
-               result = git_provider.search_repositories(query=query_string)
+                # If the output file exists, this is a case that the rule was
+                # stopped in the middle of the execution. Existing output file
+                # means that the search for the query was already done.
+                # Accordingly, we skip this query.
+                if os.path.exists(output_file):
+                    continue
 
-               output_file = f"{WORKDIR}/github_search_query_result_{start_date}_{end_date}.json"
-               with open(output_file, 'w') as f:
-                   json.dump(result, f, indent=4)
+                result = git_provider.search_repositories(query=query_string)
+
+                with open(output_file, 'w') as f:
+                    json.dump(result, f, indent=4)
+
+        # create .done_search_github_repositories file
+        with open(output[0], 'w') as f:
+            f.write("")
+
 
 rule generate_github_search_queries:
-   input:
-       WORKDIR + "/.initialized"
-   output:
-       WORKDIR + "/github_search_queries.txt"
-   params:
-       dates=github_search_date_ranges
-   run:
-       with open(output[0], 'w') as f:
-           for date_range in params.dates:
-               # snakemake workflow in:readme archived:false created:2024-11-01..2024-12-31
-               query_string = f"{GIT_SEARCH_QUERY} created:{date_range[0]}..{date_range[1]}"
-               f.write(f"{query_string}\n")
+    input:
+        WORKDIR + "/.initialized"
+    output:
+        WORKDIR + "/github_search_queries.txt"
+    params:
+        dates=github_search_date_ranges
+    run:
+        with open(output[0], 'w') as f:
+            for date_range in params.dates:
+                # snakemake workflow in:readme archived:false created:2024-11-01..2024-12-31
+                query_string = f"{GIT_SEARCH_QUERY} created:{date_range[0]}..{date_range[1]}"
+                f.write(f"{query_string}\n")
+
 
 rule make_work_directory:
-   """ make a work directory as ./results/{START_DATE}_{END_DATE} """
-   output:
-       WORKDIR + "/.initialized"
-   run:
-       os.makedirs(f"results/{GIT_SEARCH_START_DATE}_{GIT_SEARCH_END_DATE}", exist_ok=True)
-       # create .initialized file in the directory.
-       with open(output[0], 'w') as f:
-           f.write("")
+    """ make a work directory as ./results/{START_DATE}_{END_DATE} """
+    output:
+        WORKDIR + "/.initialized"
+    run:
+        os.makedirs(f"results/{GIT_SEARCH_START_DATE}_{GIT_SEARCH_END_DATE}", exist_ok=True)
+        # create .initialized file in the directory.
+        with open(output[0], 'w') as f:
+            f.write("")
