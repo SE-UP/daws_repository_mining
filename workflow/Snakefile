@@ -7,25 +7,26 @@ configfile: "config.yaml"
 
 printlog = util.setup_logger()
 
-GIT_SEARCH_START_DATE_STR = config["github_search_start_date"]
+GIT_SEARCH_START_DATE_STR = config["search_start_date"]
 GIT_SEARCH_START_DATE     = util.str_to_date(GIT_SEARCH_START_DATE_STR)
-GIT_SEARCH_END_DATE_STR   = config["github_search_end_date"]
+GIT_SEARCH_END_DATE_STR   = config["search_end_date"]
 GIT_SEARCH_END_DATE       = util.str_to_date(GIT_SEARCH_END_DATE_STR)
-GIT_SEARCH_INTERVAL       = config["github_search_interval"]
-GIT_SEARCH_QUERY          = config["github_search_query"]
-WORKDIR = config["result_dir"] + f"/{GIT_SEARCH_START_DATE_STR}_{GIT_SEARCH_END_DATE_STR}"
+GIT_SEARCH_INTERVAL       = config["search_interval"]
+GIT_SEARCH_QUERY          = config["search_query"]
+GIT_PROVIDER              = config["git_provider"]
+WORKDIR = config["result_dir"] + f"/{GIT_PROVIDER}_{GIT_SEARCH_START_DATE_STR}_{GIT_SEARCH_END_DATE_STR}"
 NOW     = util.now()
 
-github_search_date_ranges = util.generate_date_ranges(GIT_SEARCH_START_DATE, GIT_SEARCH_END_DATE, GIT_SEARCH_INTERVAL)
-START_DATES = [date_range[0] for date_range in github_search_date_ranges]
-END_DATES   = [date_range[1] for date_range in github_search_date_ranges]
-printlog.debug(f"GitHub search start dates: {START_DATES}")
-printlog.debug(f"GitHub search end dates: {END_DATES}")
+search_date_ranges = util.generate_date_ranges(GIT_SEARCH_START_DATE, GIT_SEARCH_END_DATE, GIT_SEARCH_INTERVAL)
+START_DATES = [date_range[0] for date_range in search_date_ranges]
+END_DATES   = [date_range[1] for date_range in search_date_ranges]
+printlog.debug(f"search start dates: {START_DATES}")
+printlog.debug(f"search end dates: {END_DATES}")
 
 
 rule store_metadata_in_database:
     input:
-        expand(WORKDIR + "/github_search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES)
+        expand(WORKDIR + "/search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES)
     output:
         WORKDIR + "/.done_storing_metadata"
     run:
@@ -41,11 +42,11 @@ rule store_metadata_in_database:
             f.write("")
 
 
-rule search_github_repositories:
+rule search_repositories:
     input:
-        WORKDIR + "/github_search_queries.txt"
+        WORKDIR + "/search_queries.txt"
     output:
-        WORKDIR + "/.done_search_github_repositories"
+        WORKDIR + "/.done_search_repositories"
     run:
         json_data = None
         git_provider = git_providers.GitProvider(
@@ -59,7 +60,7 @@ rule search_github_repositories:
                 date_range  = query_string.split("created:")[1].split("..")
                 start_date  = date_range[0]
                 end_date    = date_range[1]
-                output_file = f"{WORKDIR}/github_search_query_result_{start_date}_{end_date}.json"
+                output_file = f"{WORKDIR}/search_query_result_{start_date}_{end_date}.json"
 
                 # If the output file exists, this is a case that the rule was
                 # stopped in the middle of the execution. Existing output file
@@ -73,18 +74,18 @@ rule search_github_repositories:
                 with open(output_file, 'w') as f:
                     json.dump(result, f, indent=4)
 
-        # create .done_search_github_repositories file
+        # create .done_search_repositories file
         with open(output[0], 'w') as f:
             f.write("")
 
 
-rule generate_github_search_queries:
+rule generate_search_queries:
     input:
         WORKDIR + "/.initialized"
     output:
-        WORKDIR + "/github_search_queries.txt"
+        WORKDIR + "/search_queries.txt"
     params:
-        dates=github_search_date_ranges
+        dates=search_date_ranges
     run:
         with open(output[0], 'w') as f:
             for date_range in params.dates:

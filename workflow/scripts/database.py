@@ -8,22 +8,16 @@ class DatabaseDriverBase(ABC):
     """
     Abstract base class for database drivers.
     """
-    def __init__(self, logger):
+    def __init__(self, logger=logging.getLogger(), engine=None, git_provider=None):
         self.log = logger
+        self.engine = engine
+        self.git_provider = git_provider
 
 
     @abstractmethod
-    def initialize(self, **kwargs):
+    def store_search_repositories_results(self, data):
         """
-        Abstract method to initialize the database connection.
-        """
-        pass
-
-
-    @abstractmethod
-    def store_github_repository_search_results(self, data):
-        """
-        Abstract method to store data for GitHub search/repositories API.
+        Abstract method to store the search/repos results in the database.
         """
         pass
 
@@ -35,37 +29,16 @@ class DatabaseDriverBase(ABC):
         """
 
 
-class MongoDBDriver(DatabaseDriverBase):
-    """
-    Database driver for MongoDB.
-    """
-    def initialize(self, **kwargs):
-        self.log.info("MongoDBDriver initialize")
-        self.log.info(f"kwargs: {kwargs}")
-        pass
-
-
-    def store_github_repository_search_results(self, data):
-        self.log.info(f"data: {data}")
-        pass
-
-
-    def close(self):
-        self.log.info("MongoDBDriver close")
-        pass
-
-
 class Neo4jDriver(DatabaseDriverBase):
     """
     Database driver for Neo4j.
     """
-    def initialize(self, **kwargs):
+    def __init__(self, logger=logging.getLogger(), engine=None, git_provider=None):
+        super().__init__(logger, engine, git_provider)
         self.log.debug("Neo4jDriver initialize")
-        self.log.debug(f"kwargs: {kwargs}")
         pass
 
-
-    def store_github_repository_search_results(self, data):
+    def store_search_repositories_results(self, data):
         #self.log.debug(f"data: {data}")
         pass
 
@@ -79,11 +52,9 @@ class Database(DatabaseDriverBase):
     """
     Database class to interact with the database using the driver.
     """
-    def __init__(self, logger=logging.getLogger(), engine="neo4j", **kwargs):
-        super().__init__(logger)
-        self.log = logger
+    def __init__(self, logger=logging.getLogger(), engine=None, git_provider=None):
+        super().__init__(logger, engine, git_provider)
         self._db_driver = self._create_database_driver(engine, logger)
-        self.initialize(**kwargs)
 
 
     def _create_database_driver(self, engine, logger):
@@ -101,18 +72,11 @@ class Database(DatabaseDriverBase):
         return driver_class(logger)
 
 
-    def initialize(self, **kwargs):
+    def store_repository_search_results(self, data):
         """
-        Initialize the database connection using the driver.
+        Insert data for search/repositories API
         """
-        self._db_driver.initialize(**kwargs)
-
-
-    def store_github_repository_search_results(self, data):
-        """
-        Insert data for GitHub search/repositories API
-        """
-        self._db_driver.store_github_repository_search_results(data)
+        self._db_driver.store_repository_search_results(data)
 
 
     def close(self):
