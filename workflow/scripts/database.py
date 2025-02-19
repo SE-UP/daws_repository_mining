@@ -72,11 +72,11 @@ class Database(DatabaseDriverBase):
         return driver_class(logger)
 
 
-    def store_repository_search_results(self, data):
+    def store_search_repositories_results(self, data):
         """
         Insert data for search/repositories API
         """
-        self._db_driver.store_repository_search_results(data)
+        self._db_driver.store_search_repositories_results(data)
 
 
     def close(self):

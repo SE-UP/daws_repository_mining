@@ -34,7 +34,7 @@ rule store_metadata_in_database:
         for input_file in input:
             with open(input_file, 'r') as f:
                 json_data = json.load(f)
-                db.store_github_repository_search_results(json_data)
+                db.store_repository_search_results(json_data)
         db.close()
 
         # create .done_storing_metadata file
