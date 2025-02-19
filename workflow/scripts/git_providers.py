@@ -82,7 +82,7 @@ class GithubProvider(GitProviderBase):
 
     def _check_rate_limit(self, response_headers=None):
         if not response_headers:
-            return None
+            raise ValueError("Response headers are required to check rate limit")
 
         limit = response_headers.get("X-RateLimit-Limit")
         remaining = response_headers.get("X-RateLimit-Remaining")
@@ -100,6 +100,7 @@ class GithubProvider(GitProviderBase):
             self.log.info("Rate limit exceeded. Waiting for %d seconds.",
                           reset_in_secs)
             time.sleep(reset_in_secs)
+
 
     def search_repositories(self, query=None):
         self.log.info(f"Searching GitHub repositories with query: {query}")

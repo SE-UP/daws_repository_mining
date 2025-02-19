@@ -14,6 +14,10 @@ GIT_SEARCH_END_DATE       = util.str_to_date(GIT_SEARCH_END_DATE_STR)
 GIT_SEARCH_INTERVAL       = config["search_interval"]
 GIT_SEARCH_QUERY          = config["search_query"]
 GIT_PROVIDER              = config["git_provider"]
+GIT_PROVIDER_TOKEN        = config["git_provider_token"]
+DB_ENGINE                 = config["database"]["engine"]
+DB_CONFIG                 = config["database_config"][DB_ENGINE]
+
 WORKDIR = config["result_dir"] + f"/{GIT_PROVIDER}_{GIT_SEARCH_START_DATE_STR}_{GIT_SEARCH_END_DATE_STR}"
 NOW     = util.now()
 
@@ -24,20 +28,22 @@ printlog.debug(f"search start dates: {START_DATES}")
 printlog.debug(f"search end dates: {END_DATES}")
 
 
-rule store_metadata_in_database:
+rule migrate_jsonfiles_to_database:
     input:
         expand(WORKDIR + "/search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES)
     output:
-        WORKDIR + "/.done_storing_metadata"
+        WORKDIR + "/.done_migrate_jsonfiles_to_database"
     run:
-        db = database.Database(engine=config["database"]["engine"], logger=printlog)
+        db = database.Database(logger=printlog, engine=DB_ENGINE, git_provider=GIT_PROVIDER,
+                                db_config=DB_CONFIG)
+
         for input_file in input:
             with open(input_file, 'r') as f:
                 json_data = json.load(f)
-                db.store_repository_search_results(json_data)
+                db.store_search_repositories_results(json_data)
         db.close()
 
-        # create .done_storing_metadata file
+        # create .done_migrate_jsonfiles_to_database file
         with open(output[0], 'w') as f:
             f.write("")
 
@@ -50,8 +56,8 @@ rule search_repositories:
     run:
         json_data = None
         git_provider = git_providers.GitProvider(
-                provider=config["git_provider"],
-                token=config["git_provider_token"],
+                provider=GIT_PROVIDER,
+                token=GIT_PROVIDER_TOKEN,
                 logger=printlog)
 
         with open(input[0], 'r') as f:
