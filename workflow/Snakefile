@@ -17,6 +17,8 @@ GIT_PROVIDER              = config["git_provider"]
 GIT_PROVIDER_TOKEN        = config["git_provider_token"]
 DB_ENGINE                 = config["database"]["engine"]
 DB_CONFIG                 = config["database_config"][DB_ENGINE]
+BLACKLIST                 = config["snakemake-catalog-urls"]["blacklist"]
+SKIPS                     = config["snakemake-catalog-urls"]["skips"]
 
 WORKDIR = config["result_dir"] + f"/{GIT_PROVIDER}_{GIT_SEARCH_START_DATE_STR}_{GIT_SEARCH_END_DATE_STR}"
 NOW     = util.now()
@@ -30,17 +32,33 @@ printlog.debug(f"search end dates: {END_DATES}")
 
 rule migrate_jsonfiles_to_database:
     input:
+        WORKDIR + "/.done_search_repositories",
+        WORKDIR + "/blacklist.txt",
+        WORKDIR + "/skips.json",
         expand(WORKDIR + "/search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES)
+
     output:
         WORKDIR + "/.done_migrate_jsonfiles_to_database"
     run:
+
+        # Read skips.json and blacklist.txt
+        skiplist = []
+        with open(input[1], 'r') as f:
+            for line in f:
+                skiplist.append(line.strip())
+
+        with open(input[2], 'r') as f:
+            skips = json.load(f)
+            for repo in skips:
+                skiplist.append(repo["full_name"])
+
         db = database.Database(logger=printlog, engine=DB_ENGINE, git_provider=GIT_PROVIDER,
                                 db_config=DB_CONFIG)
 
-        for input_file in input:
+        for input_file in input[3:]:
             with open(input_file, 'r') as f:
                 json_data = json.load(f)
-                db.store_search_repositories_results(json_data)
+                db.store_search_repositories_results(json_data, skiplist)
         db.close()
 
         # create .done_migrate_jsonfiles_to_database file
@@ -48,11 +66,24 @@ rule migrate_jsonfiles_to_database:
             f.write("")
 
 
+rule download_skiplist_from_catalog:
+    input:
+        WORKDIR + "/.done_search_repositories",
+        expand(WORKDIR + "/search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES)
+    output:
+        WORKDIR + "/skips.json",
+        WORKDIR + "/blacklist.txt"
+    run:
+        util.download_http_file(SKIPS, output[0])
+        util.download_http_file(BLACKLIST, output[1])
+
+
 rule search_repositories:
     input:
         WORKDIR + "/search_queries.txt"
     output:
-        WORKDIR + "/.done_search_repositories"
+        WORKDIR + "/.done_search_repositories",
+        expand(WORKDIR + "/search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES)
     run:
         json_data = None
         git_provider = git_providers.GitProvider(
@@ -101,11 +132,11 @@ rule generate_search_queries:
 
 
 rule make_work_directory:
-    """ make a work directory as ./results/{START_DATE}_{END_DATE} """
+    """ Create a work directory as ./results/{GIT_PROVIDER}_{GIT_SEARCH_START_DATE}_{GIT_SEARCH_END_DATE} """
     output:
         WORKDIR + "/.initialized"
     run:
-        os.makedirs(f"results/{GIT_SEARCH_START_DATE}_{GIT_SEARCH_END_DATE}", exist_ok=True)
+        os.makedirs(f"results/{GIT_PROVIDER}_{GIT_SEARCH_START_DATE}_{GIT_SEARCH_END_DATE}", exist_ok=True)
         # create .initialized file in the directory.
         with open(output[0], 'w') as f:
             f.write("")

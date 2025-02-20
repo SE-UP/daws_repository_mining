@@ -7,7 +7,7 @@ database_config:
   neo4j:
     host: "localhost"
     port: 7687
-    user: "neo4j"
+    username: "neo4j"
     password: "your_password"
     db_name: "neo4j"
 
@@ -21,3 +21,7 @@ search_end_date: "2025-02-19"
 search_interval: "m"
 search_query: "snakemake workflow in:readme archived:false"
 result_dir: "results"
+
+snakemake-catalog-urls:
+  blacklist: https://raw.githubusercontent.com/snakemake/snakemake-workflow-catalog/main/blacklist.txt
+  skips: https://raw.githubusercontent.com/snakemake/snakemake-workflow-catalog/main/skips.json

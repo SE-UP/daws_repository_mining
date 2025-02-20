@@ -29,7 +29,7 @@ class DatabaseDriverBase(ABC):
 
 
     @abstractmethod
-    def store_search_repositories_results(self, data):
+    def store_search_repositories_results(self, data, skiplist=None):
         """
         Abstract method to store the search/repos results in the database.
         """
@@ -69,8 +69,12 @@ class Neo4jDriver(DatabaseDriverBase):
             raise e
 
 
-    def store_search_repositories_results(self, data):
+    def store_search_repositories_results(self, data, skiplist=None):
         for repo in data["items"]:
+            if skiplist and repo["full_name"] in skiplist:
+                self.log.debug(f"Skipping repository: {repo['full_name']}")
+                continue
+
             self.log.debug(f"Storing repository: {repo['full_name']}")
             try:
                 self._session.execute_query(
@@ -126,11 +130,11 @@ class Database(DatabaseDriverBase):
         return driver_class(logger, self.engine, self.git_provider, db_config)
 
 
-    def store_search_repositories_results(self, data):
+    def store_search_repositories_results(self, data, skiplist=None):
         """
         Insert data for search/repositories API
         """
-        self._db_driver.store_search_repositories_results(data)
+        self._db_driver.store_search_repositories_results(data, skiplist)
 
 
     def close(self):

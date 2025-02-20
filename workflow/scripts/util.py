@@ -1,6 +1,7 @@
 import os
 import logging
 from datetime import datetime, timedelta
+import requests
 
 LOG_FORMAT = "[%(asctime)s] %(levelname)s - %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -41,6 +42,22 @@ def setup_logger(log_level="INFO"):
     log.addHandler(console_handler)
 
     return log
+
+
+def download_http_file(url, file_path):
+    """
+    Download a file from a URL.
+    :param url: The URL of the file.
+    :param file_path: The path to save the file.
+    """
+    response = requests.get(url)
+
+    try:
+        with open(file_path, 'wb') as file:
+            file.write(response.content)
+            logging.debug("File downloaded: %s", file_path)
+    except Exception as e:
+        raise Exception(f"Error downloading file: {e}")
 
 
 def generate_date_ranges(start_date, end_date, interval):
