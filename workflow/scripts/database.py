@@ -96,7 +96,7 @@ class Neo4jDriver(DatabaseDriverBase):
                 )
 
             except Exception as e:
-                self.log.error(f"Error storing data in Neo4j: {e}")
+                self.log.error("Error storing data in Neo4j: %s", e)
                 raise e
 
     def close(self):

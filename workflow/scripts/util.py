@@ -1,3 +1,4 @@
+""" various utility functions. """
 import os
 import logging
 from datetime import datetime, timedelta
@@ -6,14 +7,14 @@ import requests
 LOG_FORMAT = "[%(asctime)s] %(levelname)s - %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
-def str_to_date(date_str, format="%Y-%m-%d"):
+def str_to_date(date_str, fmt="%Y-%m-%d"):
     """
     Convert a string to a date object.
     :param date_str: The date string.
     :param format: The format of the date string.
     :return: The date object.
     """
-    return datetime.strptime(date_str, format).date()
+    return datetime.strptime(date_str, fmt).date()
 
 
 def now():
@@ -50,7 +51,7 @@ def download_http_file(url, file_path):
     :param url: The URL of the file.
     :param file_path: The path to save the file.
     """
-    response = requests.get(url)
+    response = requests.get(url, timeout=10)
 
     try:
         with open(file_path, 'wb') as file:
@@ -73,7 +74,8 @@ def generate_date_ranges(start_date, end_date, interval):
 
     if interval == 'm':
         while current_date <= end_date:
-            next_month = datetime(current_date.year + (current_date.month // 12), (current_date.month % 12) + 1, 1).date()
+            next_month = datetime(current_date.year + (current_date.month // 12),
+                                  (current_date.month % 12) + 1, 1).date()
             month_end = min(next_month - timedelta(days=1), end_date)
             date_ranges.append([current_date, month_end])
             current_date = next_month
