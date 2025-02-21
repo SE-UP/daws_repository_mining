@@ -21,6 +21,7 @@ BLACKLIST                 = config["snakemake-catalog-urls"]["blacklist"]
 SKIPS                     = config["snakemake-catalog-urls"]["skips"]
 
 WORKDIR = config["result_dir"] + f"/{GIT_PROVIDER}_{GIT_SEARCH_START_DATE_STR}_{GIT_SEARCH_END_DATE_STR}"
+CLONEDIR = config["result_dir"] + f"/{GIT_PROVIDER}_{GIT_SEARCH_START_DATE_STR}_{GIT_SEARCH_END_DATE_STR}/cloned_repositories"
 NOW     = util.now()
 
 search_date_ranges = util.generate_date_ranges(GIT_SEARCH_START_DATE, GIT_SEARCH_END_DATE, GIT_SEARCH_INTERVAL)
@@ -32,58 +33,137 @@ printlog.debug(f"search end dates: {END_DATES}")
 
 rule migrate_jsonfiles_to_database:
     input:
-        WORKDIR + "/.done_search_repositories",
-        WORKDIR + "/blacklist.txt",
-        WORKDIR + "/skips.json",
-        expand(WORKDIR + "/search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES)
+        WORKDIR + "/.done_clone_repositories",
+        WORKDIR + "/cloned_repositories.txt",
+
+    params:
+        json_files = expand(WORKDIR + "/search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES),
+        skiplist_file = WORKDIR + "/skiplist_all.txt"
 
     output:
         WORKDIR + "/.done_migrate_jsonfiles_to_database"
-    run:
 
+    run:
         # Read skips.json and blacklist.txt
         skiplist = []
-        with open(input[1], 'r') as f:
+        with open(params.skiplist_file, 'r', encoding='utf-8') as f:
             for line in f:
                 skiplist.append(line.strip())
 
-        with open(input[2], 'r') as f:
-            skips = json.load(f)
-            for repo in skips:
-                skiplist.append(repo["full_name"])
+        # Get the list of cloned repositories
+        cloned_repositories = []
+        with open(input[1], 'r', encoding='utf-8') as f:
+            for line in f:
+                cloned_repositories.append(line.strip())
 
-        db = database.Database(logger=printlog, engine=DB_ENGINE, git_provider=GIT_PROVIDER,
-                                db_config=DB_CONFIG)
+        # Remove duplicates
+        cloned_repositories = list(set(cloned_repositories))
 
-        for input_file in input[3:]:
-            with open(input_file, 'r') as f:
+        # # Get the list of json files from WORKDIR
+        # json_files = []
+        # for file in os.listdir(WORKDIR):
+        #     if file.startswith("search_query_result_") and file.endswith(".json"):
+        #         json_files.append(file)
+
+        db = database.Database(logger=printlog, engine=DB_ENGINE,
+                                git_provider=GIT_PROVIDER, db_config=DB_CONFIG)
+
+        for json_file in params.json_files:
+            with open(f"{json_file}", 'r', encoding='utf-8') as f:
                 json_data = json.load(f)
-                db.store_search_repositories_results(json_data, skiplist)
+                db.store_search_repositories_results(json_data, cloned_repositories)
+
         db.close()
 
         # create .done_migrate_jsonfiles_to_database file
-        with open(output[0], 'w') as f:
+        with open(output[0], 'w', encoding='utf-8') as f:
+            f.write("")
+
+
+rule clone_repositories:
+    input:
+        WORKDIR + "/.done_download_skiplist_from_catalog",
+        WORKDIR + "/skiplist_all.txt"
+
+    params:
+        repolist_file = WORKDIR + "/repository_list_from_search.txt"
+
+    output:
+        WORKDIR + "/cloned_repositories.txt",
+        WORKDIR + "/.done_clone_repositories"
+
+    run:
+        skiplist_all = []
+        repos_to_clone = []
+
+        with open(params.repolist_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                repos_to_clone.append(line.strip())
+
+        with open(input[1], 'r', encoding='utf-8') as f:
+            for line in f:
+                skiplist_all.append(line.strip())
+
+        git_provider = git_providers.GitProvider(
+                provider=GIT_PROVIDER,
+                token=GIT_PROVIDER_TOKEN,
+                logger=printlog)
+
+        cloned_repositories = git_provider.clone_repositories(CLONEDIR,
+                                repos_to_clone, skiplist_all)
+
+        # create cloned_repositories.txt
+        with open(output[0], 'w', encoding='utf-8') as f:
+            for full_name in cloned_repositories:
+                f.write(f"{full_name}\n")
+
+        # create .done_clone_repositories file
+        with open(output[1], 'w', encoding='utf-8') as f:
             f.write("")
 
 
 rule download_skiplist_from_catalog:
     input:
         WORKDIR + "/.done_search_repositories",
-        expand(WORKDIR + "/search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES)
+
+    params:
+        file_skiplist  = WORKDIR + "/skips.json",
+        file_blacklist = WORKDIR + "/blacklist.txt",
+
     output:
         WORKDIR + "/skips.json",
-        WORKDIR + "/blacklist.txt"
+        WORKDIR + "/blacklist.txt",
+        WORKDIR + "/skiplist_all.txt",
+        WORKDIR + "/.done_download_skiplist_from_catalog"
     run:
         util.download_http_file(SKIPS, output[0])
         util.download_http_file(BLACKLIST, output[1])
+
+        merged_skiplist = util.merge_skiplist(file_blacklist=output[1],
+                          file_skiplist=output[0])
+
+        # create skiplist_all.txt
+        with open(output[2], 'w', encoding='utf-8') as f:
+            for item in merged_skiplist:
+                f.write(f"{item}\n")
+
+        # create .done_download_skiplist_from_catalog file
+        with open(output[3], 'w', encoding='utf-8') as f:
+            f.write("")
 
 
 rule search_repositories:
     input:
         WORKDIR + "/search_queries.txt"
+
+    params:
+        json_files = expand(WORKDIR + "/search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES)
+
     output:
         WORKDIR + "/.done_search_repositories",
+        WORKDIR + "/repository_list_from_search.txt",
         expand(WORKDIR + "/search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES)
+
     run:
         json_data = None
         git_provider = git_providers.GitProvider(
@@ -91,7 +171,7 @@ rule search_repositories:
                 token=GIT_PROVIDER_TOKEN,
                 logger=printlog)
 
-        with open(input[0], 'r') as f:
+        with open(input[0], 'r', encoding='utf-8') as f:
             for line in f:
                 query_string = line.strip()
                 date_range  = query_string.split("created:")[1].split("..")
@@ -108,11 +188,19 @@ rule search_repositories:
 
                 result = git_provider.search_repositories(query=query_string)
 
-                with open(output_file, 'w') as f:
+                with open(output_file, 'w', encoding='utf-8') as f:
                     json.dump(result, f, indent=4)
 
+        # create repository_list_from_search.txt
+        for json_file in params.json_files:
+            with open(json_file, 'r', encoding='utf-8') as f:
+                json_data = json.load(f)
+                with open(output[1], 'a', encoding='utf-8') as f:
+                    for item in json_data["items"]:
+                        f.write(f"{item['full_name']}\n")
+
         # create .done_search_repositories file
-        with open(output[0], 'w') as f:
+        with open(output[0], 'w', encoding='utf-8') as f:
             f.write("")
 
 
@@ -124,7 +212,7 @@ rule generate_search_queries:
     params:
         dates=search_date_ranges
     run:
-        with open(output[0], 'w') as f:
+        with open(output[0], 'w', encoding='utf-8') as f:
             for date_range in params.dates:
                 # snakemake workflow in:readme archived:false created:2024-11-01..2024-12-31
                 query_string = f"{GIT_SEARCH_QUERY} created:{date_range[0]}..{date_range[1]}"
@@ -138,5 +226,5 @@ rule make_work_directory:
     run:
         os.makedirs(f"results/{GIT_PROVIDER}_{GIT_SEARCH_START_DATE}_{GIT_SEARCH_END_DATE}", exist_ok=True)
         # create .initialized file in the directory.
-        with open(output[0], 'w') as f:
+        with open(output[0], 'w', encoding='utf-8') as f:
             f.write("")

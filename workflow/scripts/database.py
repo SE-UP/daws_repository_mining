@@ -29,7 +29,7 @@ class DatabaseDriverBase(ABC):
 
 
     @abstractmethod
-    def store_search_repositories_results(self, data, skiplist=None):
+    def store_search_repositories_results(self, data, clonedlist=None):
         """
         Abstract method to store the search/repos results in the database.
         """
@@ -69,13 +69,17 @@ class Neo4jDriver(DatabaseDriverBase):
             raise e
 
 
-    def store_search_repositories_results(self, data, skiplist=None):
-        for repo in data["items"]:
-            if skiplist and repo["full_name"] in skiplist:
-                self.log.debug(f"Skipping repository: {repo['full_name']}")
-                continue
+    def store_search_repositories_results(self, data, clonedlist=None):
+        len_data = len(data["items"])
+        total_count = 0
+        self.log.info("Storing %d search/repositories results in Neo4j", len_data)
+        for index, repo in enumerate(data["items"]):
+            full_name = repo["full_name"]
 
-            self.log.debug(f"Storing repository: {repo['full_name']}")
+            if clonedlist and full_name not in clonedlist:
+                self.log.warning("%s is not in the cloned list", full_name)
+
+            self.log.debug("(%d/%d) Storing repository: %s", index+1, len_data, full_name)
             try:
                 self._session.execute_query(
                     """
@@ -95,9 +99,13 @@ class Neo4jDriver(DatabaseDriverBase):
                     database=self.db_name
                 )
 
+                total_count += 1
+
             except Exception as e:
                 self.log.error("Error storing data in Neo4j: %s", e)
                 raise e
+
+        self.log.info("Total repositories stored: %d", total_count)
 
     def close(self):
         self.log.debug("Neo4jDriver close")
@@ -130,11 +138,11 @@ class Database(DatabaseDriverBase):
         return driver_class(logger, self.engine, self.git_provider, db_config)
 
 
-    def store_search_repositories_results(self, data, skiplist=None):
+    def store_search_repositories_results(self, data, clonedlist=None):
         """
         Insert data for search/repositories API
         """
-        self._db_driver.store_search_repositories_results(data, skiplist)
+        self._db_driver.store_search_repositories_results(data, clonedlist)
 
 
     def close(self):

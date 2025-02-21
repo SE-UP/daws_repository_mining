@@ -1,5 +1,6 @@
 """ various utility functions. """
 import os
+import json
 import logging
 from datetime import datetime, timedelta
 import requests
@@ -51,11 +52,15 @@ def download_http_file(url, file_path):
     :param url: The URL of the file.
     :param file_path: The path to save the file.
     """
-    response = requests.get(url, timeout=10)
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        raise Exception(f"Error downloading file: {e}")
 
     try:
-        with open(file_path, 'wb') as file:
-            file.write(response.content)
+        with open(file_path, 'w', encoding='utf-8') as file:
+            file.write(response.content.decode('utf-8'))
             logging.debug("File downloaded: %s", file_path)
     except Exception as e:
         raise Exception(f"Error downloading file: {e}")
@@ -93,3 +98,26 @@ def generate_date_ranges(start_date, end_date, interval):
             current_date += timedelta(days=1)
 
     return date_ranges
+
+
+def merge_skiplist(file_blacklist=None, file_skiplist=None):
+    """
+    Return a list of repos(full_name) to skip after merging the blacklist and skiplist.
+    :param file_blacklist: The blacklist file.
+    :param file_skiplist: The skiplist file.
+    :return: The merged list.
+    """
+    blacklist = []
+    skiplist  = []
+    if file_blacklist:
+        # blacklist is a txt file
+        with open(file_blacklist, 'r', encoding='utf-8') as file:
+            blacklist = file.read().splitlines()
+
+    if file_skiplist:
+        # skiplist is a json file
+        with open(file_skiplist, 'r', encoding='utf-8') as file:
+            json_data = json.load(file)
+            skiplist = [repo['full_name'] for repo in json_data]
+
+    return list(set(blacklist) | set(skiplist))
