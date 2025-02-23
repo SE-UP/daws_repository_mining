@@ -202,8 +202,16 @@ class GithubProvider(GitProviderBase):
 
             self.log.info("(%d/%d) Cloning repo: %s", total_cloned, total_repos, full_name)
 
-            pygit2.clone_repository(self.base_url_clone + "/" + full_name + ".git",
-                                      clonedir)
+            # Retry cloning the repo 5 times after 1 min pause for each if it fails.
+            for _ in range(5):
+                try:
+                    pygit2.clone_repository(self.base_url_clone + "/" + full_name + ".git",
+                                          clonedir)
+                    break
+                except Exception as e:
+                    self.log.error("Failed to clone repo - %s : %s", full_name, e)
+                    self.log.info("Retrying after 1 min... (%d/5)", _)
+                    time.sleep(self.wait_sec_clone)
 
             time.sleep(self.wait_sec_clone)
 
