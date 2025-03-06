@@ -29,7 +29,7 @@ class GitProviderBase(ABC):
 
 
     @abstractmethod
-    def clone_repositories(self, basedir=None, repos=None, skiplist=None):
+    def clone_repositories(self, basedir=None, repos=None):
         """
         Abstract method to clone repositories from the provider.
         """
@@ -73,11 +73,11 @@ class GitProvider(GitProviderBase):
         return self._provider_instance.search_repositories(query)
 
 
-    def clone_repositories(self, basedir=None, repos=None, skiplist=None):
+    def clone_repositories(self, basedir=None, repos=None):
         """
         Clone repositories using the current provider.
         """
-        return self._provider_instance.clone_repositories(basedir, repos, skiplist)
+        return self._provider_instance.clone_repositories(basedir, repos)
 
 
 class GithubProvider(GitProviderBase):
@@ -171,7 +171,7 @@ class GithubProvider(GitProviderBase):
         return {"provider": "github", "total_count": total_count, "items": items}
 
 
-    def clone_repositories(self, basedir=None, repos=None, skiplist=None):
+    def clone_repositories(self, basedir=None, repos=None):
         pygit2 = importlib.import_module("pygit2")
 
         if not basedir:
@@ -181,15 +181,11 @@ class GithubProvider(GitProviderBase):
             return []
 
         cloned_repos = []
-        skiplist = skiplist or []
         total_repos = len(repos)
         total_cloned = 0
 
         for full_name in repos:
             total_cloned += 1
-            if full_name in skiplist:
-                self.log.info("(%d/%d) Skipping repo: %s", total_cloned, total_repos, full_name)
-                continue
 
             # replace / in full_name with _.
             clonedir = basedir + "/" + full_name.replace("/", "_")
@@ -203,14 +199,14 @@ class GithubProvider(GitProviderBase):
             self.log.info("(%d/%d) Cloning repo: %s", total_cloned, total_repos, full_name)
 
             # Retry cloning the repo 5 times after 1 min pause for each if it fails.
-            for _ in range(5):
+            for try_count in range(5):
                 try:
                     pygit2.clone_repository(self.base_url_clone + "/" + full_name + ".git",
                                           clonedir)
                     break
                 except Exception as e:
                     self.log.error("Failed to clone repo - %s : %s", full_name, e)
-                    self.log.info("Retrying after 1 min... (%d/5)", _)
+                    self.log.info("Retrying after 1 min... (%d/5)", try_count)
                     time.sleep(self.wait_sec_clone)
 
             time.sleep(self.wait_sec_clone)

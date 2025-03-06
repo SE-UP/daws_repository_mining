@@ -33,6 +33,7 @@ class DatabaseDriverBase(ABC):
         """
         Abstract method to store the search/repos results in the database.
         """
+        return []
 
 
     @abstractmethod
@@ -72,14 +73,19 @@ class Neo4jDriver(DatabaseDriverBase):
     def store_search_repositories_results(self, data, clonedlist=None):
         len_data = len(data["items"])
         total_count = 0
+        stored_repos = []
         self.log.info("Storing %d search/repositories results in Neo4j", len_data)
         for index, repo in enumerate(data["items"]):
+            index += 1
             full_name = repo["full_name"]
 
             if clonedlist and full_name not in clonedlist:
-                self.log.warning("%s is not in the cloned list", full_name)
+                self.log.debug("(%d/%d) Skipping repository: %s not cloned as listed in skiplist",
+                               index, len_data, full_name)
+                continue
 
-            self.log.debug("(%d/%d) Storing repository: %s", index+1, len_data, full_name)
+            self.log.debug("(%d/%d) Storing repository: %s", index, len_data, full_name)
+
             try:
                 self._session.execute_query(
                     """
@@ -100,12 +106,14 @@ class Neo4jDriver(DatabaseDriverBase):
                 )
 
                 total_count += 1
+                stored_repos.append(full_name)
 
             except Exception as e:
                 self.log.error("Error storing data in Neo4j: %s", e)
                 raise e
 
-        self.log.info("Total repositories stored: %d", total_count)
+        self.log.info("Total repositories stored: %d out of %d", total_count, len_data)
+        return stored_repos
 
     def close(self):
         self.log.debug("Neo4jDriver close")
@@ -142,7 +150,7 @@ class Database(DatabaseDriverBase):
         """
         Insert data for search/repositories API
         """
-        self._db_driver.store_search_repositories_results(data, clonedlist)
+        return self._db_driver.store_search_repositories_results(data, clonedlist)
 
 
     def close(self):

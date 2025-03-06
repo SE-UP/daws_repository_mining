@@ -35,45 +35,51 @@ rule migrate_jsonfiles_to_database:
     input:
         WORKDIR + "/.done_clone_repositories",
         WORKDIR + "/cloned_repositories.txt",
+        WORKDIR + "/repositories_to_clone.txt",
 
     params:
         json_files = expand(WORKDIR + "/search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES),
         skiplist_file = WORKDIR + "/skiplist_all.txt"
 
     output:
-        WORKDIR + "/.done_migrate_jsonfiles_to_database"
+        WORKDIR + "/.done_migrate_jsonfiles_to_database",
+        WORKDIR + "/migrated_repositories.txt"
 
     run:
-        # Read skips.json and blacklist.txt
-        skiplist = []
-        with open(params.skiplist_file, 'r', encoding='utf-8') as f:
-            for line in f:
-                skiplist.append(line.strip())
-
         # Get the list of cloned repositories
         cloned_repositories = []
+        repositories_to_clone = []
         with open(input[1], 'r', encoding='utf-8') as f:
             for line in f:
                 cloned_repositories.append(line.strip())
 
-        # Remove duplicates
-        cloned_repositories = list(set(cloned_repositories))
+        with open(input[2], 'r', encoding='utf-8') as f:
+            for line in f:
+                repositories_to_clone.append(line.strip())
 
-        # # Get the list of json files from WORKDIR
-        # json_files = []
-        # for file in os.listdir(WORKDIR):
-        #     if file.startswith("search_query_result_") and file.endswith(".json"):
-        #         json_files.append(file)
+        for repo in repositories_to_clone:
+            if repo not in cloned_repositories:
+                printlog.warning("Repository not cloned: " + repo)
 
         db = database.Database(logger=printlog, engine=DB_ENGINE,
                                 git_provider=GIT_PROVIDER, db_config=DB_CONFIG)
 
+        stored_repositories = []
         for json_file in params.json_files:
             with open(f"{json_file}", 'r', encoding='utf-8') as f:
-                json_data = json.load(f)
-                db.store_search_repositories_results(json_data, cloned_repositories)
+                api_response = json.load(f)
+                if "items" in api_response and len(api_response["items"]) > 0:
+                    stored_repositories = db.store_search_repositories_results(
+                                            api_response, cloned_repositories)
+                else:
+                    printlog.debug(f"No items in {json_file}")
 
         db.close()
+
+        # create migrated_repositories.txt
+        with open(output[1], 'w', encoding='utf-8') as f:
+            for full_name in stored_repositories:
+                f.write(f"{full_name}\n")
 
         # create .done_migrate_jsonfiles_to_database file
         with open(output[0], 'w', encoding='utf-8') as f:
@@ -90,19 +96,33 @@ rule clone_repositories:
 
     output:
         WORKDIR + "/cloned_repositories.txt",
+        WORKDIR + "/repositories_to_clone.txt",
         WORKDIR + "/.done_clone_repositories"
 
     run:
         skiplist_all = []
-        repos_to_clone = []
-
-        with open(params.repolist_file, 'r', encoding='utf-8') as f:
-            for line in f:
-                repos_to_clone.append(line.strip())
+        repositories_to_clone = []
 
         with open(input[1], 'r', encoding='utf-8') as f:
             for line in f:
                 skiplist_all.append(line.strip())
+
+        skip_count = 0
+        target_count = 0
+        with open(params.repolist_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                if line.strip() not in skiplist_all:
+                    repositories_to_clone.append(line.strip())
+                    target_count += 1
+                else:
+                    skip_count += 1
+
+        printlog.info("Number of repositories to clone: %s (skipped: %s)" %
+                                                (target_count, skip_count))
+
+        with open(output[1], 'w', encoding='utf-8') as f:
+            for full_name in repositories_to_clone:
+                f.write(f"{full_name}\n")
 
         git_provider = git_providers.GitProvider(
                 provider=GIT_PROVIDER,
@@ -110,7 +130,9 @@ rule clone_repositories:
                 logger=printlog)
 
         cloned_repositories = git_provider.clone_repositories(CLONEDIR,
-                                repos_to_clone, skiplist_all)
+                                repositories_to_clone)
+
+        printlog.info("Number of cloned repositories: %s" % len(cloned_repositories))
 
         # create cloned_repositories.txt
         with open(output[0], 'w', encoding='utf-8') as f:
@@ -118,7 +140,7 @@ rule clone_repositories:
                 f.write(f"{full_name}\n")
 
         # create .done_clone_repositories file
-        with open(output[1], 'w', encoding='utf-8') as f:
+        with open(output[2], 'w', encoding='utf-8') as f:
             f.write("")
 
 
