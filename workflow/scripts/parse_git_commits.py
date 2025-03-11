@@ -8,7 +8,7 @@ def get_git_commits(repo_path):
     if not os.path.isdir(repo_path):
         print(f"Error: The path '{repo_path}' is not a valid directory.")
         return []
-    
+
     try:
         log_format = "%H|%an|%ad|%s"  # Hash | Author | Date | Message
         result = subprocess.run(
@@ -59,7 +59,7 @@ def main():
 
     print("Fetching commit logs...\n")
     log_lines = get_git_commits(repo_path)
-    
+
     if log_lines:
         parsed_commits = parse_commit_logs(log_lines)
         save_to_json(parsed_commits, output_file)
