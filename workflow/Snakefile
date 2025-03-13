@@ -2,6 +2,7 @@ import json
 import scripts.util as util
 import scripts.database as database
 import scripts.git_providers as git_providers
+import scripts.parse_git_commits as parse_git_commits
 
 configfile: "config.yaml"
 
@@ -29,6 +30,23 @@ START_DATES = [date_range[0] for date_range in search_date_ranges]
 END_DATES   = [date_range[1] for date_range in search_date_ranges]
 printlog.debug(f"search start dates: {START_DATES}")
 printlog.debug(f"search end dates: {END_DATES}")
+
+
+rule analyse_git_commit:
+    input:
+        WORKDIR + "/.done_clone_repositories",
+        WORKDIR + "/cloned_repositories.txt",
+        WORKDIR + "/repositories_to_clone.txt"
+    params:
+        cloned_repos_dir = WORKDIR + "/cloned_repositories"
+    output:
+        WORKDIR + "/metadata.json",  # Single JSON file with all commit logs
+        WORKDIR + "/.done_analyse_git_commit"
+    run:
+        parse_git_commits.process_all_repositories(params.cloned_repos_dir, output[0])
+
+        with open(output[1], 'w', encoding='utf-8') as f:
+            f.write("")
 
 
 rule migrate_jsonfiles_to_database:
