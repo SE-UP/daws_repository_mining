@@ -37,11 +37,14 @@ rule analyse_git_commit:
         WORKDIR + "/.done_clone_repositories",
         WORKDIR + "/cloned_repositories.txt",
         WORKDIR + "/repositories_to_clone.txt"
+
     params:
         cloned_repos_dir = WORKDIR + "/cloned_repositories"
+
     output:
-        WORKDIR + "/metadata.json",  # Single JSON file with all commit logs
+        WORKDIR + "/metadata_git_commit.txt",
         WORKDIR + "/.done_analyse_git_commit"
+
     run:
         parse_git_commits.process_all_repositories(params.cloned_repos_dir, output[0])
 
