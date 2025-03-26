@@ -25,21 +25,21 @@ class GitProviderBase(ABC):
     @abstractmethod
     def search_repositories(self, query) -> dict:
         """
-        Abstract method to search repositories in the provider.
+        Abstract method to search repositories.
         """
 
 
     @abstractmethod
     def get_issues(self, owner=None, repo=None) -> dict:
         """
-        Abstract method to get issues of a repository in the provider.
+        Abstract method to get issues of a repository.
         """
 
 
     @abstractmethod
     def clone_repositories(self, basedir=None, repos=None) -> list:
         """
-        Abstract method to clone repositories from the provider.
+        Abstract method to clone repositories.
         """
 
 
@@ -172,19 +172,18 @@ class GithubProvider(GitProviderBase):
             old_total_count   = total_count
             new_total_count   = old_total_count + current_count
 
+            self._check_rate_limit(response_headers)
+
             if not issues_results:
-                self.log.debug("No issues found for repo: %s/%s", owner, repo)
                 break
 
             items.extend(issues_results)
 
-            self.log.debug("Repo: %s/%s, Page: %d, Item count: %d+%d=%d",
-                           owner, repo, current_page, current_count,
-                           old_total_count, new_total_count)
+            self.log.debug("Retrieved %d+%d=%d items on the page %d in %s/%s.",
+                           current_count, old_total_count, new_total_count,
+                           current_page, owner, repo)
 
             total_count = new_total_count
-
-            self._check_rate_limit(response_headers)
 
             link_header = response_headers.get("Link")
             next_link = None

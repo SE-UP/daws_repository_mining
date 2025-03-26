@@ -126,7 +126,7 @@ rule get_issues:
 
     output:
         WORKDIR + "/.done_get_issues",
-        WORKDIR + "/issues_repositories.txt"
+        WORKDIR + "/repositories_with_issues.txt"
 
     run:
         cloned_repositories = []
@@ -138,20 +138,24 @@ rule get_issues:
 
         for search_result_file in params.search_result_files:
             with open(search_result_file, 'r', encoding='utf-8') as f:
-                api_response = json.load(f)
-                if "items" not in api_response or len(api_response["items"]) < 1:
+                search_api_response = json.load(f)
+                if "items" not in search_api_response or len(search_api_response["items"]) < 1:
                     printlog.error(f"No items in {search_result_file}")
                     continue
 
-                for repo_details in api_response["items"]:
-                    if "has_issues" not in repo_details or not repo_details["has_issues"]:
+                for repo_details in search_api_response["items"]:
+                    owner, repo = repo_details["full_name"].split("/")
+                    if {"owner": owner, "repo": repo} not in cloned_repositories:
                         continue
 
-                    owner, repo = repo_details["full_name"].split("/")
-                    if {"owner": owner, "repo": repo} in cloned_repositories:
-                        issues = GIT_HANDLER.get_issues(owner, repo)
+                    if "has_issues" not in repo_details or not repo_details["has_issues"]:
+                        printlog.debug("Issues is disabled for %s" % repo_details["full_name"])
+                        continue
+
+                    issues = GIT_HANDLER.get_issues(owner, repo)
 
                     if issues["total_count"] < 1:
+                        printlog.debug(f"No issues in {owner}/{repo}")
                         continue
 
                     os.makedirs(params.issues_dir, exist_ok=True)
@@ -160,10 +164,12 @@ rule get_issues:
                         printlog.info(f"Saved issues for {owner}/{repo}, total: {issues['total_count']}")
                         issues_repositories.append(f"{owner}/{repo}")
 
-        if len(issues_repositories) > 0:
-            with open(output[1], 'w', encoding='utf-8') as f:
+        with open(output[1], 'w', encoding='utf-8') as f:
+            if len(issues_repositories) > 0:
                 for full_name in issues_repositories:
                     f.write(f"{full_name}\n")
+            else:
+                f.write("[]")
 
         with open(output[0], 'w', encoding='utf-8') as f:
             f.write("")
