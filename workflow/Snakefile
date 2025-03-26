@@ -32,31 +32,13 @@ printlog.debug(f"search start dates: {START_DATES}")
 printlog.debug(f"search end dates: {END_DATES}")
 
 
-rule analyse_git_commit:
-    input:
-        WORKDIR + "/.done_clone_repositories",
-        WORKDIR + "/cloned_repositories.txt",
-        WORKDIR + "/repositories_to_clone.txt"
-
-    params:
-        cloned_repos_dir = WORKDIR + "/cloned_repositories"
-
-    output:
-        WORKDIR + "/metadata_git_commit.txt",
-        WORKDIR + "/.done_analyse_git_commit"
-
-    run:
-        parse_git_commits.process_all_repositories(params.cloned_repos_dir, output[0])
-
-        with open(output[1], 'w', encoding='utf-8') as f:
-            f.write("")
-
-
 rule migrate_jsonfiles_to_database:
     input:
         WORKDIR + "/.done_clone_repositories",
         WORKDIR + "/cloned_repositories.txt",
         WORKDIR + "/repositories_to_clone.txt",
+        WORKDIR + "/.done_get_issues",
+        WORKDIR + "/.done_analyse_git_commit"
 
     params:
         json_files = expand(WORKDIR + "/search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES),
@@ -103,6 +85,86 @@ rule migrate_jsonfiles_to_database:
                 f.write(f"{full_name}\n")
 
         # create .done_migrate_jsonfiles_to_database file
+        with open(output[0], 'w', encoding='utf-8') as f:
+            f.write("")
+
+
+rule analyse_git_commit:
+    input:
+        WORKDIR + "/.done_clone_repositories",
+        WORKDIR + "/cloned_repositories.txt",
+        WORKDIR + "/repositories_to_clone.txt"
+
+    params:
+        cloned_repos_dir = WORKDIR + "/cloned_repositories"
+
+    output:
+        WORKDIR + "/metadata_git_commit.txt",
+        WORKDIR + "/.done_analyse_git_commit"
+
+    run:
+        parse_git_commits.process_all_repositories(params.cloned_repos_dir, output[0])
+
+        with open(output[1], 'w', encoding='utf-8') as f:
+            f.write("")
+
+
+rule get_issues:
+    input:
+        WORKDIR + "/.done_clone_repositories",
+        WORKDIR + "/cloned_repositories.txt",
+        WORKDIR + "/repositories_to_clone.txt"
+
+    params:
+        search_result_files = expand(WORKDIR + "/search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES),
+        issues_dir = WORKDIR + "/issues_by_repository"
+
+    output:
+        WORKDIR + "/.done_get_issues",
+        WORKDIR + "/issues_repositories.txt"
+
+    run:
+        cloned_repositories = []
+        issues_repositories = []
+        with open(input[1], 'r', encoding='utf-8') as f:
+            for line in f:
+                owner, repo = line.strip().split("/")
+                cloned_repositories.append({"owner": owner, "repo": repo})
+
+        git_provider = git_providers.GitProvider(
+            provider=GIT_PROVIDER,
+            token=GIT_PROVIDER_TOKEN,
+            logger=printlog)
+
+        for search_result_file in params.search_result_files:
+            with open(search_result_file, 'r', encoding='utf-8') as f:
+                api_response = json.load(f)
+                if "items" not in api_response or len(api_response["items"]) < 1:
+                    printlog.error(f"No items in {search_result_file}")
+                    continue
+
+                for repo_details in api_response["items"]:
+                    if "has_issues" not in repo_details or not repo_details["has_issues"]:
+                        continue
+
+                    owner, repo = repo_details["full_name"].split("/")
+                    if {"owner": owner, "repo": repo} in cloned_repositories:
+                        issues = git_provider.get_issues(owner, repo)
+
+                    if issues["total_count"] < 1:
+                        continue
+
+                    os.makedirs(params.issues_dir, exist_ok=True)
+                    with open(f"{params.issues_dir}/{owner}_{repo}_issues.json", 'w', encoding='utf-8') as f:
+                        json.dump(issues["items"], f, indent=4)
+                        printlog.info(f"Saved issues for {owner}/{repo}, total: {issues['total_count']}")
+                        issues_repositories.append(f"{owner}/{repo}")
+
+        if len(issues_repositories) > 0:
+            with open(output[1], 'w', encoding='utf-8') as f:
+                for full_name in issues_repositories:
+                    f.write(f"{full_name}\n")
+
         with open(output[0], 'w', encoding='utf-8') as f:
             f.write("")
 

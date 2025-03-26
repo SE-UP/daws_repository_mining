@@ -2,6 +2,7 @@
 like GitHub, GitLab, etc."""
 
 import os
+import re
 import sys
 import time
 import logging
@@ -29,11 +30,17 @@ class GitProviderBase(ABC):
 
 
     @abstractmethod
-    def clone_repositories(self, basedir=None, repos=None):
+    def get_issues(self, owner=None, repo=None) -> dict:
+        """
+        Abstract method to get issues of a repository in the provider.
+        """
+
+
+    @abstractmethod
+    def clone_repositories(self, basedir=None, repos=None) -> list:
         """
         Abstract method to clone repositories from the provider.
         """
-        return []
 
 
 class GitProvider(GitProviderBase):
@@ -68,9 +75,16 @@ class GitProvider(GitProviderBase):
 
     def search_repositories(self, query):
         """
-        Search repositories using the current provider.
+        Search repositories.
         """
         return self._provider_instance.search_repositories(query)
+
+
+    def get_issues(self, owner=None, repo=None):
+        """
+        Get issues of a repository.
+        """
+        return self._provider_instance.get_issues(owner, repo)
 
 
     def clone_repositories(self, basedir=None, repos=None):
@@ -131,6 +145,61 @@ class GithubProvider(GitProviderBase):
             self.log.info("Rate limit exceeded. Waiting for %d seconds.",
                           reset_in_secs)
             time.sleep(reset_in_secs)
+
+
+    def get_issues(self, owner=None, repo=None):
+        items         = []
+        total_count   = 0
+        current_page  = 1
+        current_count = 0
+        next_link_pattern = r'(?<=<)([\S]*)(?=>; rel="Next")'
+
+        request_url = f"{self.base_url_api}/repos/{owner}/{repo}/issues?state=all&per_page=100&page={current_page}"
+
+        while True:
+            issues_results = requests.get(
+                request_url,
+                headers=self.http_headers,
+                timeout=10)
+
+            if issues_results.status_code != 200:
+                error_message = f"Failed to get issues: {issues_results.text}"
+                raise requests.exceptions.HTTPError(error_message)
+
+            response_headers  = issues_results.headers
+            issues_results    = issues_results.json()
+            current_count    += len(issues_results)
+            old_total_count   = total_count
+            new_total_count   = old_total_count + current_count
+
+            if not issues_results:
+                self.log.debug("No issues found for repo: %s/%s", owner, repo)
+                break
+
+            items.extend(issues_results)
+
+            self.log.debug("Repo: %s/%s, Page: %d, Item count: %d+%d=%d",
+                           owner, repo, current_page, current_count,
+                           old_total_count, new_total_count)
+
+            total_count = new_total_count
+
+            self._check_rate_limit(response_headers)
+
+            link_header = response_headers.get("Link")
+            next_link = None
+
+            if link_header:
+                next_link = re.search(next_link_pattern, link_header)
+
+            if next_link:
+                current_page += 1
+                request_url = next_link.group(0)
+                continue
+
+            break
+
+        return {"provider": "github", "total_count": total_count, "items": items}
 
 
     def search_repositories(self, query=None):
