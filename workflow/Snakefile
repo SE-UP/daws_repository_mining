@@ -1,5 +1,6 @@
 import json
 import scripts.util as util
+import scripts.storage as storage
 import scripts.database as database
 import scripts.git_providers as git_providers
 import scripts.parse_git_commits as parse_git_commits
@@ -25,7 +26,9 @@ WORKDIR = config["result_dir"] + f"/{GIT_PROVIDER}_{GIT_SEARCH_START_DATE_STR}_{
 CLONEDIR = config["result_dir"] + f"/{GIT_PROVIDER}_{GIT_SEARCH_START_DATE_STR}_{GIT_SEARCH_END_DATE_STR}/cloned_repositories"
 NOW     = util.now()
 
-GIT_HANDLER = git_providers.GitProvider(
+storage_handler = storage.Storage(logger=printlog, engine="file", storage_config={"is_absolute": True})
+
+git_handler = git_providers.GitProvider(
     provider=GIT_PROVIDER,
     token=GIT_PROVIDER_TOKEN,
     logger=printlog)
@@ -54,16 +57,8 @@ rule migrate_jsonfiles_to_database:
         WORKDIR + "/migrated_repositories.txt"
 
     run:
-        # Get the list of cloned repositories
-        cloned_repositories = []
-        repositories_to_clone = []
-        with open(input[1], 'r', encoding='utf-8') as f:
-            for line in f:
-                cloned_repositories.append(line.strip())
-
-        with open(input[2], 'r', encoding='utf-8') as f:
-            for line in f:
-                repositories_to_clone.append(line.strip())
+        cloned_repositories = storage_handler.read(input[1], multiple_lines=True)
+        repositories_to_clone = storage_handler.read(input[2], multiple_lines=True)
 
         for repo in repositories_to_clone:
             if repo not in cloned_repositories:
@@ -74,24 +69,17 @@ rule migrate_jsonfiles_to_database:
 
         stored_repositories = []
         for json_file in params.json_files:
-            with open(f"{json_file}", 'r', encoding='utf-8') as f:
-                api_response = json.load(f)
-                if "items" in api_response and len(api_response["items"]) > 0:
-                    stored_repositories = db.store_search_repositories_results(
-                                            api_response, cloned_repositories)
-                else:
-                    printlog.debug(f"No items in {json_file}")
+            api_response = storage_handler.read(json_file, from_json=True)
+            if "items" in api_response and len(api_response["items"]) > 0:
+                stored_repositories = db.store_search_repositories_results(
+                                        api_response, cloned_repositories)
+            else:
+                printlog.debug(f"No items in {json_file}")
 
         db.close()
 
-        # create migrated_repositories.txt
-        with open(output[1], 'w', encoding='utf-8') as f:
-            for full_name in stored_repositories:
-                f.write(f"{full_name}\n")
-
-        # create .done_migrate_jsonfiles_to_database file
-        with open(output[0], 'w', encoding='utf-8') as f:
-            f.write("")
+        storage_handler.write(output[1], stored_repositories)
+        storage_handler.write(output[0], "")
 
 
 rule analyse_git_commit:
@@ -110,8 +98,7 @@ rule analyse_git_commit:
     run:
         parse_git_commits.process_all_repositories(params.cloned_repos_dir, output[0])
 
-        with open(output[1], 'w', encoding='utf-8') as f:
-            f.write("")
+        storage_handler.write(output[1], "")
 
 
 rule get_issues:
@@ -131,48 +118,38 @@ rule get_issues:
     run:
         cloned_repositories = []
         issues_repositories = []
-        with open(input[1], 'r', encoding='utf-8') as f:
-            for line in f:
-                owner, repo = line.strip().split("/")
-                cloned_repositories.append({"owner": owner, "repo": repo})
+        full_names = storage_handler.read(input[1], multiple_lines=True)
+        for full_name in full_names:
+            owner, repo = full_name.split("/")
+            cloned_repositories.append({"owner": owner, "repo": repo})
 
         for search_result_file in params.search_result_files:
-            with open(search_result_file, 'r', encoding='utf-8') as f:
-                search_api_response = json.load(f)
-                if "items" not in search_api_response or len(search_api_response["items"]) < 1:
-                    printlog.error(f"No items in {search_result_file}")
+            search_api_response = storage_handler.read(search_result_file, from_json=True)
+            if "items" not in search_api_response or len(search_api_response["items"]) < 1:
+                printlog.error(f"No items in {search_result_file}")
+                continue
+
+            for repo_details in search_api_response["items"]:
+                owner, repo = repo_details["full_name"].split("/")
+                if {"owner": owner, "repo": repo} not in cloned_repositories:
                     continue
 
-                for repo_details in search_api_response["items"]:
-                    owner, repo = repo_details["full_name"].split("/")
-                    if {"owner": owner, "repo": repo} not in cloned_repositories:
-                        continue
+                if "has_issues" not in repo_details or not repo_details["has_issues"]:
+                    printlog.debug("Issues is disabled for %s" % repo_details["full_name"])
+                    continue
 
-                    if "has_issues" not in repo_details or not repo_details["has_issues"]:
-                        printlog.debug("Issues is disabled for %s" % repo_details["full_name"])
-                        continue
+                issues = git_handler.get_issues(owner, repo)
 
-                    issues = GIT_HANDLER.get_issues(owner, repo)
+                if issues["total_count"] < 1:
+                    printlog.debug(f"No issues in {owner}/{repo}")
+                    continue
 
-                    if issues["total_count"] < 1:
-                        printlog.debug(f"No issues in {owner}/{repo}")
-                        continue
+                storage_handler.write(f"{params.issues_dir}/{owner}_{repo}_issues.json", issues["items"])
+                printlog.info(f"Saved issues for {owner}/{repo}, total: {issues['total_count']}")
+                issues_repositories.append(f"{owner}/{repo}")
 
-                    os.makedirs(params.issues_dir, exist_ok=True)
-                    with open(f"{params.issues_dir}/{owner}_{repo}_issues.json", 'w', encoding='utf-8') as f:
-                        json.dump(issues["items"], f, indent=4)
-                        printlog.info(f"Saved issues for {owner}/{repo}, total: {issues['total_count']}")
-                        issues_repositories.append(f"{owner}/{repo}")
-
-        with open(output[1], 'w', encoding='utf-8') as f:
-            if len(issues_repositories) > 0:
-                for full_name in issues_repositories:
-                    f.write(f"{full_name}\n")
-            else:
-                f.write("[]")
-
-        with open(output[0], 'w', encoding='utf-8') as f:
-            f.write("")
+        storage_handler.write(output[1], issues_repositories)
+        storage_handler.write(output[0], "")
 
 
 rule clone_repositories:
@@ -189,43 +166,30 @@ rule clone_repositories:
         WORKDIR + "/.done_clone_repositories"
 
     run:
-        skiplist_all = []
-        repositories_to_clone = []
-
-        with open(input[1], 'r', encoding='utf-8') as f:
-            for line in f:
-                skiplist_all.append(line.strip())
+        skiplist_all = storage_handler.read(input[1], multiple_lines=True)
 
         skip_count = 0
         target_count = 0
-        with open(params.repolist_file, 'r', encoding='utf-8') as f:
-            for line in f:
-                if line.strip() not in skiplist_all:
-                    repositories_to_clone.append(line.strip())
-                    target_count += 1
-                else:
-                    skip_count += 1
+        repositories_to_clone = storage_handler.read(params.repolist_file, multiple_lines=True)
+        for repo in repositories_to_clone:
+            if repo in skiplist_all:
+                skip_count += 1
+                repositories_to_clone.remove(repo)
+            else:
+                target_count += 1
 
         printlog.info("Number of repositories to clone: %s (skipped: %s)" %
                                                 (target_count, skip_count))
 
-        with open(output[1], 'w', encoding='utf-8') as f:
-            for full_name in repositories_to_clone:
-                f.write(f"{full_name}\n")
+        storage_handler.write(output[1], repositories_to_clone)
 
-        cloned_repositories = GIT_HANDLER.clone_repositories(CLONEDIR,
+        cloned_repositories = git_handler.clone_repositories(CLONEDIR,
                                 repositories_to_clone)
 
         printlog.info("Number of cloned repositories: %s" % len(cloned_repositories))
 
-        # create cloned_repositories.txt
-        with open(output[0], 'w', encoding='utf-8') as f:
-            for full_name in cloned_repositories:
-                f.write(f"{full_name}\n")
-
-        # create .done_clone_repositories file
-        with open(output[2], 'w', encoding='utf-8') as f:
-            f.write("")
+        storage_handler.write(output[0], cloned_repositories)
+        storage_handler.write(output[2], "")
 
 
 rule download_skiplist_from_catalog:
@@ -248,14 +212,8 @@ rule download_skiplist_from_catalog:
         merged_skiplist = util.merge_skiplist(file_blacklist=output[1],
                           file_skiplist=output[0])
 
-        # create skiplist_all.txt
-        with open(output[2], 'w', encoding='utf-8') as f:
-            for item in merged_skiplist:
-                f.write(f"{item}\n")
-
-        # create .done_download_skiplist_from_catalog file
-        with open(output[3], 'w', encoding='utf-8') as f:
-            f.write("")
+        storage_handler.write(output[2], merged_skiplist)
+        storage_handler.write(output[3], "")
 
 
 rule search_repositories:
@@ -273,37 +231,32 @@ rule search_repositories:
     run:
         json_data = None
 
-        with open(input[0], 'r', encoding='utf-8') as f:
-            for line in f:
-                query_string = line.strip()
-                date_range  = query_string.split("created:")[1].split("..")
-                start_date  = date_range[0]
-                end_date    = date_range[1]
-                output_file = f"{WORKDIR}/search_query_result_{start_date}_{end_date}.json"
+        query_strings = storage_handler.read(input[0], multiple_lines=True)
+        for query_string in query_strings:
+            date_range  = query_string.split("created:")[1].split("..")
+            start_date  = date_range[0]
+            end_date    = date_range[1]
+            output_file = f"{WORKDIR}/search_query_result_{start_date}_{end_date}.json"
 
-                # If the output file exists, this is a case that the rule was
-                # stopped in the middle of the execution. Existing output file
-                # means that the search for the query was already done.
-                # Accordingly, we skip this query.
-                if os.path.exists(output_file):
-                    continue
+            # If the output file exists, this is a case that the rule was
+            # stopped in the middle of the execution. Existing output file
+            # means that the search for the query was already done.
+            # Accordingly, we skip this query.
+            if os.path.exists(output_file):
+                continue
 
-                result = GIT_HANDLER.search_repositories(query=query_string)
+            result = git_handler.search_repositories(query=query_string)
+            storage_handler.write(output_file, result, to_json=True)
 
-                with open(output_file, 'w', encoding='utf-8') as f:
-                    json.dump(result, f, indent=4)
-
+        items = []
         # create repository_list_from_search.txt
         for json_file in params.json_files:
-            with open(json_file, 'r', encoding='utf-8') as f:
-                json_data = json.load(f)
-                with open(output[1], 'a', encoding='utf-8') as f:
-                    for item in json_data["items"]:
-                        f.write(f"{item['full_name']}\n")
+            json_data = storage_handler.read(json_file, from_json=True)
+            for item in json_data["items"]:
+                items.append(item["full_name"])
 
-        # create .done_search_repositories file
-        with open(output[0], 'w', encoding='utf-8') as f:
-            f.write("")
+        storage_handler.write(output[1], items)
+        storage_handler.write(output[0], "")
 
 
 rule generate_search_queries:
@@ -314,12 +267,13 @@ rule generate_search_queries:
     params:
         dates=search_date_ranges
     run:
-        with open(output[0], 'w', encoding='utf-8') as f:
-            for date_range in params.dates:
-                # snakemake workflow in:readme archived:false created:2024-11-01..2024-12-31
-                query_string = f"{GIT_SEARCH_QUERY} created:{date_range[0]}..{date_range[1]}"
-                f.write(f"{query_string}\n")
+        query_strings = []
+        for date_range in params.dates:
+            # snakemake workflow in:readme archived:false created:2024-11-01..2024-12-31
+            query_string = f"{GIT_SEARCH_QUERY} created:{date_range[0]}..{date_range[1]}"
+            query_strings.append(query_string)
 
+        storage_handler.write(output[0], query_strings)
 
 rule make_work_directory:
     """ Create a work directory as ./results/{GIT_PROVIDER}_{GIT_SEARCH_START_DATE}_{GIT_SEARCH_END_DATE} """
@@ -328,5 +282,4 @@ rule make_work_directory:
     run:
         os.makedirs(f"results/{GIT_PROVIDER}_{GIT_SEARCH_START_DATE}_{GIT_SEARCH_END_DATE}", exist_ok=True)
         # create .initialized file in the directory.
-        with open(output[0], 'w', encoding='utf-8') as f:
-            f.write("")
+        storage_handler.write(output[0], "")
