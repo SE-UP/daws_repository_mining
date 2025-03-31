@@ -273,12 +273,14 @@ rule clone_repositories:
 
         skip_count = 0
         target_count = 0
-        repositories_to_clone = storage_handler.read(params.repolist_file, multiple_lines=True)
-        for repo in repositories_to_clone:
+        repositories_to_clone = []
+        searched_repositories = storage_handler.read(params.repolist_file, multiple_lines=True)
+        for repo in searched_repositories:
+            printlog.debug("Checking %s", repo)
             if repo in skiplist_all:
                 skip_count += 1
-                repositories_to_clone.remove(repo)
             else:
+                repositories_to_clone.append(repo)
                 target_count += 1
 
         printlog.info("Number of repositories to clone: %s (skipped: %s)",
