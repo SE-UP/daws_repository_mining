@@ -181,13 +181,14 @@ class GithubProvider(GitProviderBase):
         all_comments = []
         current_page = 1
         while True:
+            request_url_with_page = request_url + f"&page={current_page}"
             response = requests.get(
-                request_url + f"&page={current_page}",
+                request_url_with_page,
                 headers=self.http_headers,
                 timeout=10)
 
             if response.status_code != 200:
-                error_message = f"Failed to get comments: {response.text}"
+                error_message = f"Failed to get comments: {request_url_with_page}: {response.text}"
                 raise requests.exceptions.HTTPError(error_message)
 
             if not response:
@@ -245,7 +246,7 @@ class GithubProvider(GitProviderBase):
                 timeout=10)
 
             if issues_results.status_code != 200:
-                error_message = f"Failed to get issues: {issues_results.text}"
+                error_message = f"Failed to get issues: {request_url}: {issues_results.text}"
                 raise requests.exceptions.HTTPError(error_message)
 
             response_headers  = issues_results.headers
@@ -291,13 +292,14 @@ class GithubProvider(GitProviderBase):
         current_count = 0
 
         while True:
+            request_url = f"{self.base_url_api}/search/repositories?q={query}&per_page=100&page={current_page}"
             search_results = requests.get(
-                f"{self.base_url_api}/search/repositories?q={query}&per_page=100&page={current_page}",
+                request_url,
                 headers=self.http_headers,
                 timeout=10)
 
             if search_results.status_code != 200:
-                error_message = f"Failed to search repositories: {search_results.text}"
+                error_message = f"Failed to search repositories: {request_url}: {search_results.text}"
                 raise requests.exceptions.HTTPError(error_message)
 
             response_headers  = search_results.headers
