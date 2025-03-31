@@ -4,6 +4,7 @@ import scripts.storage as storage
 import scripts.database as database
 import scripts.git_providers as git_providers
 import scripts.parse_git_commits as parse_git_commits
+import scripts.commit_size as commit_size
 
 configfile: "config.yaml"
 
@@ -38,6 +39,18 @@ START_DATES = [date_range[0] for date_range in search_date_ranges]
 END_DATES   = [date_range[1] for date_range in search_date_ranges]
 printlog.debug(f"search start dates: {START_DATES}")
 printlog.debug(f"search end dates: {END_DATES}")
+
+
+rule commit_size_analysis:
+    input:
+        WORKDIR + "/.done_clone_repositories"
+    params:
+        cloned_repos_dir = WORKDIR + "/cloned_repositories"
+    output:
+        WORKDIR + "/.done_commit_size_analysis"
+    run:
+        commit_size.process_all_repositories(params.cloned_repos_dir)
+        storage_handler.write(output[0], "")
 
 
 rule migrate_jsonfiles_to_database:
