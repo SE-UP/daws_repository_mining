@@ -374,7 +374,7 @@ rule search_repositories:
             for item in json_data["items"]:
                 items.append(item["full_name"])
 
-        storage_handler.write(output[1], items, to_json=True)
+        storage_handler.write(output[1], items)
         storage_handler.write(output[0], "")
 
 
