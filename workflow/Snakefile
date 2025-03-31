@@ -164,7 +164,12 @@ rule get_issues_extras:
             else:
                 for pullrequest in issues_as_pr:
                     issue_number = pullrequest["number"]
-                    details = git_handler.get_pullrequest_details(owner, repo, issue_number)
+                    details = None
+                    try:
+                        details = git_handler.get_pullrequest_details(owner, repo, issue_number)
+                    except Exception as e:
+                        printlog.error("Failed to get pull request details for %s/%s#%d: %s",
+                                        owner, repo, issue_number, e)
                     if details is not None:
                         all_pullrequests.append(details)
 
@@ -180,7 +185,12 @@ rule get_issues_extras:
                     issue_number = issue["number"]
                     count_comments = issue["comments"]
 
-                    comments = git_handler.get_issue_comments(owner, repo, issue_number)
+                    comments = None
+                    try:
+                        comments = git_handler.get_issue_comments(owner, repo, issue_number)
+                    except Exception as e:
+                        printlog.error("Failed to get comments for %s/%s#%d: %s",
+                                        owner, repo, issue_number, e)
                     if comments is not None and len(comments) > 0:
                         all_comments.extend(comments)
                     else:
@@ -241,9 +251,13 @@ rule get_issues:
                     printlog.debug("Issues is disabled for %s", full_name)
                     continue
 
-                issues = git_handler.get_issues(owner, repo)
+                issues = None
+                try:
+                    issues = git_handler.get_issues(owner, repo)
+                except Exception as e:
+                    printlog.error("Failed to get issues for %s: %s", full_name, e)
 
-                if issues["total_count"] < 1:
+                if issues is not None or issues["total_count"] < 1:
                     printlog.debug("No issues in %s.", full_name)
                     continue
 
