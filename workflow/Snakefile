@@ -42,18 +42,6 @@ printlog.debug(f"search start dates: {START_DATES}")
 printlog.debug(f"search end dates: {END_DATES}")
 
 
-rule commit_size_analysis:
-    input:
-        WORKDIR + "/.done_clone_repositories"
-    params:
-        cloned_repos_dir = WORKDIR + "/cloned_repositories"
-    output:
-        WORKDIR + "/.done_commit_size_analysis"
-    run:
-        commit_size.process_all_repositories(params.cloned_repos_dir)
-        storage_handler.write(output[0], "")
-
-
 rule migrate_jsonfiles_to_database:
     input:
         WORKDIR + "/.done_clone_repositories",
@@ -257,7 +245,7 @@ rule get_issues:
                 except Exception as e:
                     printlog.error("Failed to get issues for %s: %s", full_name, e)
 
-                if issues is not None or issues["total_count"] < 1:
+                if issues is None or issues["total_count"] < 1:
                     printlog.debug("No issues in %s.", full_name)
                     continue
 
