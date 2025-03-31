@@ -37,6 +37,20 @@ class GitProviderBase(ABC):
 
 
     @abstractmethod
+    def get_issue_comments(self, owner=None, repo=None, issue_number=None) -> list:
+        """
+        Abstract method to get the comments of an issue.
+        """
+
+
+    @abstractmethod
+    def get_pullrequest_details(self, owner=None, repo=None, issue_number=None) -> list:
+        """
+        Abstract method to get the pull request details of an issue.
+        """
+
+
+    @abstractmethod
     def clone_repositories(self, basedir=None, repos=None) -> list:
         """
         Abstract method to clone repositories.
@@ -85,6 +99,20 @@ class GitProvider(GitProviderBase):
         Get issues of a repository.
         """
         return self._provider_instance.get_issues(owner, repo)
+
+
+    def get_issue_comments(self, owner=None, repo=None, issue_number=None):
+        """
+        Get the comments of an issue.
+        """
+        return self._provider_instance.get_issue_comments(owner, repo, issue_number)
+
+
+    def get_pullrequest_details(self, owner=None, repo=None, issue_number=None):
+        """
+        Get the pull request details of an issue.
+        """
+        return self._provider_instance.get_pullrequest_details(owner, repo, issue_number)
 
 
     def clone_repositories(self, basedir=None, repos=None):
@@ -145,6 +173,60 @@ class GithubProvider(GitProviderBase):
             self.log.info("Rate limit exceeded. Waiting for %d seconds.",
                           reset_in_secs)
             time.sleep(reset_in_secs)
+
+
+    def get_issue_comments(self, owner=None, repo=None, issue_number=None):
+        request_url = f"{self.base_url_api}/repos/{owner}/{repo}/issues/{issue_number}/comments?per_page=100"
+
+        all_comments = []
+        current_page = 1
+        while True:
+            response = requests.get(
+                request_url + f"&page={current_page}",
+                headers=self.http_headers,
+                timeout=10)
+
+            if response.status_code != 200:
+                error_message = f"Failed to get comments: {response.text}"
+                raise requests.exceptions.HTTPError(error_message)
+
+            if not response:
+                raise ValueError("No comments found for %s/%s, issue no. %d.",
+                               owner, repo, issue_number)
+
+            self.log.debug("Got %d comments of issue no. %d of %s/%s.", len(response.json()),
+                           issue_number, owner, repo)
+
+            self._check_rate_limit(response.headers)
+
+            count_comments = len(response.json())
+            all_comments.extend(response.json())
+
+            if count_comments < 100:
+                break
+
+            current_page += 1
+
+        return all_comments
+
+
+    def get_pullrequest_details(self, owner=None, repo=None, issue_number=None):
+        request_url = f"{self.base_url_api}/repos/{owner}/{repo}/pulls/{issue_number}"
+
+        response = requests.get(request_url, headers=self.http_headers, timeout=10)
+
+        if response.status_code != 200:
+            error_message = f"Failed to get pull request details: {request_url}: {response.text}"
+            raise requests.exceptions.HTTPError(error_message)
+
+        if not response:
+            raise ValueError("No pull request details of issue no. %d of %s/%s.",
+                           issue_number, owner, repo)
+
+        self.log.debug("Got pull request details of issue no. %d of %s/%s.", issue_number, owner, repo)
+        self._check_rate_limit(response.headers)
+
+        return response.json()
 
 
     def get_issues(self, owner=None, repo=None):

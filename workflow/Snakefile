@@ -1,3 +1,4 @@
+import os
 import json
 import scripts.util as util
 import scripts.storage as storage
@@ -27,7 +28,7 @@ WORKDIR = config["result_dir"] + f"/{GIT_PROVIDER}_{GIT_SEARCH_START_DATE_STR}_{
 CLONEDIR = config["result_dir"] + f"/{GIT_PROVIDER}_{GIT_SEARCH_START_DATE_STR}_{GIT_SEARCH_END_DATE_STR}/cloned_repositories"
 NOW     = util.now()
 
-storage_handler = storage.Storage(logger=printlog, engine="file", storage_config={"is_absolute": True})
+storage_handler = storage.Storage(logger=printlog, engine="file", storage_config={"is_absolute": True, "mkdir_ok": True})
 
 git_handler = git_providers.GitProvider(
     provider=GIT_PROVIDER,
@@ -59,6 +60,7 @@ rule migrate_jsonfiles_to_database:
         WORKDIR + "/cloned_repositories.txt",
         WORKDIR + "/repositories_to_clone.txt",
         WORKDIR + "/.done_get_issues",
+        WORKDIR + "/.done_get_issues_extras",
         WORKDIR + "/.done_analyse_git_commit"
 
     params:
@@ -75,7 +77,7 @@ rule migrate_jsonfiles_to_database:
 
         for repo in repositories_to_clone:
             if repo not in cloned_repositories:
-                printlog.warning("Repository not cloned: " + repo)
+                printlog.warning("Repository not cloned: %s", repo)
 
         db = database.Database(logger=printlog, engine=DB_ENGINE,
                                 git_provider=GIT_PROVIDER, db_config=DB_CONFIG)
@@ -87,7 +89,7 @@ rule migrate_jsonfiles_to_database:
                 stored_repositories = db.store_search_repositories_results(
                                         api_response, cloned_repositories)
             else:
-                printlog.debug(f"No items in {json_file}")
+                printlog.debug("No items in %s", json_file)
 
         db.close()
 
@@ -112,6 +114,87 @@ rule analyse_git_commit:
         parse_git_commits.process_all_repositories(params.cloned_repos_dir, output[0])
 
         storage_handler.write(output[1], "")
+
+
+rule get_issues_extras:
+    input:
+        WORKDIR + "/.done_get_issues",
+        WORKDIR + "/repositories_with_issues.txt"
+
+    params:
+        issues_dir = WORKDIR + "/issues_by_repository"
+
+    output:
+        WORKDIR + "/.done_get_issues_extras",
+
+    run:
+        repositories_with_issues = storage_handler.read(input[1], multiple_lines=True)
+
+        for i, repo_fullname in enumerate(repositories_with_issues):
+            owner, repo = repo_fullname.strip().split("/")
+            all_issues           = None
+            all_comments         = list()
+            issues_non_pr        = list()
+            issues_as_pr         = list()
+            issues_with_comments = list()
+            all_pullrequests     = list()
+            file_issues          = f"{params.issues_dir}/{owner}_{repo}_issues.json"
+            file_comments        = f"{params.issues_dir}/{owner}_{repo}_issues_comments.json"
+            file_pullrequests    = f"{params.issues_dir}/{owner}_{repo}_issues_pullrequests.json"
+
+            all_issues = storage_handler.read(file_issues, from_json=True)
+            if all_issues is None:
+                printlog.error("Failed to read %s.", file_issues)
+                continue
+
+            for issue in all_issues:
+                if "comments" in issue and issue["comments"] > 0:
+                    issues_with_comments.append(issue)
+
+                if "pull_request" in issue:
+                    issues_as_pr.append(issue)
+                else:
+                    issues_non_pr.append(issue)
+
+            printlog.info("Getting extras from %d issues and %d pull requests from %s.",
+                            len(issues_non_pr), len(issues_as_pr), repo_fullname)
+
+            if os.path.exists(file_pullrequests):
+                printlog.info("Pull requests are already saved for %s.", repo_fullname)
+            else:
+                for pullrequest in issues_as_pr:
+                    issue_number = pullrequest["number"]
+                    details = git_handler.get_pullrequest_details(owner, repo, issue_number)
+                    if details is not None:
+                        all_pullrequests.append(details)
+
+                if len(all_pullrequests) > 0:
+                    storage_handler.write(file_pullrequests, all_pullrequests, to_json=True)
+                    printlog.info("Saved %d pull request details for %s",
+                                    len(all_pullrequests), repo_fullname)
+
+            if os.path.exists(file_comments):
+                printlog.info("Comments are already saved for %s.", repo_fullname)
+            else:
+                for issue in issues_with_comments:
+                    issue_number = issue["number"]
+                    count_comments = issue["comments"]
+
+                    comments = git_handler.get_issue_comments(owner, repo, issue_number)
+                    if comments is not None and len(comments) > 0:
+                        all_comments.extend(comments)
+                    else:
+                        printlog.warning("Failed to get comments for %s/%s#%d",
+                                         owner, repo, issue_number)
+
+                if len(all_comments) > 0:
+                    storage_handler.write(file_comments, all_comments, to_json=True)
+                    printlog.info("Saved %d comments of %d issues for %s",
+                                    len(all_comments), len(issues_with_comments), repo_fullname)
+                else:
+                    printlog.debug("No comments found for %s", repo_fullname)
+
+        storage_handler.write(output[0], "")
 
 
 rule get_issues:
@@ -139,26 +222,33 @@ rule get_issues:
         for search_result_file in params.search_result_files:
             search_api_response = storage_handler.read(search_result_file, from_json=True)
             if "items" not in search_api_response or len(search_api_response["items"]) < 1:
-                printlog.error(f"No items in {search_result_file}")
+                printlog.error("No items in %s.", search_result_file)
                 continue
 
             for repo_details in search_api_response["items"]:
-                owner, repo = repo_details["full_name"].split("/")
+                full_name = repo_details["full_name"]
+                owner, repo = full_name.split("/")
+
+                if os.path.exists(f"{params.issues_dir}/{owner}_{repo}_issues.json"):
+                    printlog.info("Issues are already saved for %s.", full_name)
+                    issues_repositories.append(full_name)
+                    continue
+
                 if {"owner": owner, "repo": repo} not in cloned_repositories:
                     continue
 
                 if "has_issues" not in repo_details or not repo_details["has_issues"]:
-                    printlog.debug("Issues is disabled for %s" % repo_details["full_name"])
+                    printlog.debug("Issues is disabled for %s", full_name)
                     continue
 
                 issues = git_handler.get_issues(owner, repo)
 
                 if issues["total_count"] < 1:
-                    printlog.debug(f"No issues in {owner}/{repo}")
+                    printlog.debug("No issues in %s.", full_name)
                     continue
 
-                storage_handler.write(f"{params.issues_dir}/{owner}_{repo}_issues.json", issues["items"])
-                printlog.info(f"Saved issues for {owner}/{repo}, total: {issues['total_count']}")
+                storage_handler.write(f"{params.issues_dir}/{owner}_{repo}_issues.json", issues["items"], to_json=True)
+                printlog.info("Saved issues for %s, total: %d", full_name, issues["total_count"])
                 issues_repositories.append(f"{owner}/{repo}")
 
         storage_handler.write(output[1], issues_repositories)
@@ -191,15 +281,15 @@ rule clone_repositories:
             else:
                 target_count += 1
 
-        printlog.info("Number of repositories to clone: %s (skipped: %s)" %
-                                                (target_count, skip_count))
+        printlog.info("Number of repositories to clone: %s (skipped: %s)",
+                                                target_count, skip_count)
 
         storage_handler.write(output[1], repositories_to_clone)
 
         cloned_repositories = git_handler.clone_repositories(CLONEDIR,
                                 repositories_to_clone)
 
-        printlog.info("Number of cloned repositories: %s" % len(cloned_repositories))
+        printlog.info("Number of cloned repositories: %s", len(cloned_repositories))
 
         storage_handler.write(output[0], cloned_repositories)
         storage_handler.write(output[2], "")
@@ -268,7 +358,7 @@ rule search_repositories:
             for item in json_data["items"]:
                 items.append(item["full_name"])
 
-        storage_handler.write(output[1], items)
+        storage_handler.write(output[1], items, to_json=True)
         storage_handler.write(output[0], "")
 
 
