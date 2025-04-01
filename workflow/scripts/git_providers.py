@@ -130,7 +130,7 @@ class GithubProvider(GitProviderBase):
         super().__init__(logger=logger, provider=provider, token=token)
         self.base_url_api   = "https://api.github.com"
         self.base_url_clone = "https://github.com"
-        self.wait_sec_api = 2
+        self.wait_sec_api = 0.8
         self.wait_sec_clone = 60
         self.http_headers = {
             "Accept": "application/json",
