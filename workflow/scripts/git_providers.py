@@ -272,7 +272,7 @@ class GithubProvider(GitProviderBase):
             next_link = None
 
             if link_header:
-                next_link = re.search(next_link_pattern, link_header)
+                next_link = re.search(next_link_pattern, link_header, re.IGNORECASE)
 
             if next_link:
                 current_page += 1
