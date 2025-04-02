@@ -251,7 +251,7 @@ class GithubProvider(GitProviderBase):
 
             response_headers  = issues_results.headers
             issues_results    = issues_results.json()
-            current_count    += len(issues_results)
+            current_count     = len(issues_results)
             old_total_count   = total_count
             new_total_count   = old_total_count + current_count
 
