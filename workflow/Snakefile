@@ -122,13 +122,16 @@ rule get_issues_extras:
             owner, repo = repo_fullname.strip().split("/")
             all_issues           = None
             all_comments         = list()
+            all_events           = list()
             issues_non_pr        = list()
             issues_as_pr         = list()
             issues_with_comments = list()
             all_pullrequests     = list()
+            all_events           = list()
             file_issues          = f"{params.issues_dir}/{owner}_{repo}_issues.json"
             file_comments        = f"{params.issues_dir}/{owner}_{repo}_issues_comments.json"
             file_pullrequests    = f"{params.issues_dir}/{owner}_{repo}_issues_pullrequests.json"
+            file_events          = f"{params.issues_dir}/{owner}_{repo}_issues_events.json"
 
             all_issues = storage_handler.read(file_issues, from_json=True)
             if all_issues is None:
@@ -171,8 +174,6 @@ rule get_issues_extras:
             else:
                 for issue in issues_with_comments:
                     issue_number = issue["number"]
-                    count_comments = issue["comments"]
-
                     comments = None
                     try:
                         comments = git_handler.get_issue_comments(owner, repo, issue_number)
@@ -191,6 +192,31 @@ rule get_issues_extras:
                                     len(all_comments), len(issues_with_comments), repo_fullname)
                 else:
                     printlog.debug("No comments found for %s", repo_fullname)
+
+            if os.path.exists(file_events):
+                printlog.info("Events are already saved for %s.", repo_fullname)
+            else:
+                for issue in all_issues:
+                    issue_number = issue["number"]
+                    events = None
+                    try:
+                        events = git_handler.get_issue_events(owner, repo, issue_number)
+                    except Exception as e:
+                        printlog.error("Failed to get events for %s/%s#%d: %s",
+                                        owner, repo, issue_number, e)
+                    if events is not None and len(events) > 0:
+                        all_events.extend(events)
+                    else:
+                        printlog.warning("Failed to get events for %s/%s#%d",
+                                         owner, repo, issue_number)
+
+                if len(all_events) > 0:
+                    storage_handler.write(file_events, all_events, to_json=True)
+                    printlog.info("Saved %d events of %d issues for %s",
+                                    len(all_events), len(all_issues), repo_fullname)
+                else:
+                    printlog.debug("No events found for %s", repo_fullname)
+
 
         storage_handler.write(output[0], "")
 
