@@ -250,8 +250,12 @@ class GithubProvider(GitProviderBase):
 
             self._check_rate_limit(response.headers)
 
-            count_events = len(response.json())
-            all_events.extend(response.json())
+            events = response.json()
+            count_events = len(events)
+            if count_events > 0:
+                for event in events:
+                    event["issue"] = {"number": issue_number}
+            all_events.extend(events)
 
             if count_events < 100:
                 break
