@@ -1,3 +1,6 @@
 requests
 neo4j
 pygit2
+matplotlib
+pandas
+gitpython
