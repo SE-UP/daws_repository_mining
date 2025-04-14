@@ -4,3 +4,4 @@ pygit2
 matplotlib
 pandas
 gitpython
+pydriller
