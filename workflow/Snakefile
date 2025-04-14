@@ -132,7 +132,7 @@ rule get_issues_extras:
         WORKDIR + "/repositories_with_issues.txt"
 
     params:
-        issues_dir = WORKDIR + "/issues_by_repository"
+        issues_dir = WORKDIR + "/api_responses_by_repository",
 
     output:
         WORKDIR + "/.done_get_issues_extras",
@@ -251,7 +251,7 @@ rule get_issues:
 
     params:
         search_result_files = expand(WORKDIR + "/search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES),
-        issues_dir = WORKDIR + "/issues_by_repository"
+        issues_dir = WORKDIR + "/api_responses_by_repository",
 
     output:
         WORKDIR + "/.done_get_issues",
