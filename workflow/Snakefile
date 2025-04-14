@@ -3,8 +3,8 @@ import scripts.util as util
 import scripts.storage as storage
 import scripts.database as database
 import scripts.git_providers as git_providers
-import scripts.parse_git_commits as parse_git_commits
-import scripts.commit_size as commit_size
+# import scripts.parse_git_commits as parse_git_commits
+# import scripts.commit_size as commit_size
 
 configfile: "config.yaml"
 
@@ -48,8 +48,8 @@ rule migrate_jsonfiles_to_database:
         WORKDIR + "/repositories_to_clone.txt",
         WORKDIR + "/.done_get_issues",
         WORKDIR + "/.done_get_issues_extras",
-        WORKDIR + "/.done_analyse_git_commit",
-        WORKDIR + "/.done_analyse_commit_size",
+        # WORKDIR + "/.done_analyse_git_commit",
+        # WORKDIR + "/.done_analyse_commit_size",
 
     params:
         json_files = expand(WORKDIR + "/search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES),
@@ -85,45 +85,45 @@ rule migrate_jsonfiles_to_database:
         storage_handler.write(output[0], "")
 
 
-rule analyse_commit_size:
-    input:
-        WORKDIR + "/.done_clone_repositories"
-    params:
-        cloned_repos_dir = WORKDIR + "/cloned_repositories"
-    output:
-        WORKDIR + "/.done_analyse_commit_size"
-    run:
+# rule analyse_commit_size:
+#     input:
+#         WORKDIR + "/.done_clone_repositories"
+#     params:
+#         cloned_repos_dir = WORKDIR + "/cloned_repositories"
+#     output:
+#         WORKDIR + "/.done_analyse_commit_size"
+#     run:
+#
+#         commit_sizes = commit_size.process_all_repositories(params.cloned_repos_dir)
+#
+#         for repo_name in os.listdir(params.cloned_repos_dir):
+#             repo_path = os.path.join(params.cloned_repos_dir, repo_name)
+#             commit_sizes_file = os.path.join(repo_path, "commit_sizes.json")
+#             plot_file = os.path.join(repo_path, "codebase_growth.png")
+#             storage_handler.write(commit_sizes_file, commit_sizes[repo_name], to_json=True)
+#             printlog.info(f"commit_sizes.json created in {repo_path}")
+#             printlog.info(f"Plot saved as {plot_file}")
+#
+#         storage_handler.write(output[0], "")
 
-        commit_sizes = commit_size.process_all_repositories(params.cloned_repos_dir)
 
-        for repo_name in os.listdir(params.cloned_repos_dir):
-            repo_path = os.path.join(params.cloned_repos_dir, repo_name)
-            commit_sizes_file = os.path.join(repo_path, "commit_sizes.json")
-            plot_file = os.path.join(repo_path, "codebase_growth.png")
-            storage_handler.write(commit_sizes_file, commit_sizes[repo_name], to_json=True)
-            printlog.info(f"commit_sizes.json created in {repo_path}")
-            printlog.info(f"Plot saved as {plot_file}")
-
-        storage_handler.write(output[0], "")
-
-
-rule analyse_git_commit:
-    input:
-        WORKDIR + "/.done_clone_repositories",
-        WORKDIR + "/cloned_repositories.txt",
-        WORKDIR + "/repositories_to_clone.txt"
-
-    params:
-        cloned_repos_dir = WORKDIR + "/cloned_repositories"
-
-    output:
-        WORKDIR + "/metadata_git_commit.txt",
-        WORKDIR + "/.done_analyse_git_commit"
-
-    run:
-        parse_git_commits.process_all_repositories(params.cloned_repos_dir, output[0])
-
-        storage_handler.write(output[1], "")
+# rule analyse_git_commit:
+#     input:
+#         WORKDIR + "/.done_clone_repositories",
+#         WORKDIR + "/cloned_repositories.txt",
+#         WORKDIR + "/repositories_to_clone.txt"
+#
+#     params:
+#         cloned_repos_dir = WORKDIR + "/cloned_repositories"
+#
+#     output:
+#         WORKDIR + "/metadata_git_commit.txt",
+#         WORKDIR + "/.done_analyse_git_commit"
+#
+#     run:
+#         parse_git_commits.process_all_repositories(params.cloned_repos_dir, output[0])
+#
+#         storage_handler.write(output[1], "")
 
 
 rule get_issues_extras:
