@@ -57,3 +57,17 @@ class Validator:
             raise ValueError("Fullname's format must be <owner>/<repo>.")
 
         return fullname
+
+
+    def format_git_commit_hash(self, hash=None):
+        """Validate a git commit hash."""
+        if hash is None:
+            raise ValueError("Hash parameter is required.")
+
+        if not isinstance(hash, str):
+            raise ValueError("Hash must be a string.")
+
+        if len(hash) != 40:
+            raise ValueError("Hash must be 40 characters long.")
+
+        return hash
