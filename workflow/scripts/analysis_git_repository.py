@@ -53,6 +53,7 @@ class GitAnalysis:
                     "parents"              : commit.parents ,       # list
                     "files"                : [],
                     "file_extensions"      : [],
+                    "change_types"         : [],
                     "n_deletions"          : commit.deletions,
                     "n_insertions"         : commit.insertions,
                     "n_lines"              : commit.lines,
@@ -86,6 +87,9 @@ class GitAnalysis:
                     file_extension = self._extract_file_extensions(file.filename)
                     if file_extension and file_extension not in commit_info["file_extensions"]:
                         commit_info["file_extensions"].append(file_extension)
+
+                    if file.change_type.name not in commit_info["change_types"]:
+                        commit_info["change_types"].append(file.change_type.name)
 
                     if file.filename == "Snakefile" or file.filename.endswith(".smk"):
                         file_info["is_snakemake"] = True
