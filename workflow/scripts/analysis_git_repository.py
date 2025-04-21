@@ -52,6 +52,7 @@ class GitAnalysis:
                     "is_merge"             : commit.merge ,         # bool
                     "parents"              : commit.parents ,       # list
                     "files"                : [],
+                    "file_extensions"      : [],
                     "n_deletions"          : commit.deletions,
                     "n_insertions"         : commit.insertions,
                     "n_lines"              : commit.lines,
@@ -81,6 +82,10 @@ class GitAnalysis:
                         "n_snakemake_rule_added": 0,
                         "n_snakemake_rule_removed": 0
                     }
+
+                    file_extension = self._extract_file_extensions(file.filename)
+                    if file_extension and file_extension not in commit_info["file_extensions"]:
+                        commit_info["file_extensions"].append(file_extension)
 
                     if file.filename == "Snakefile" or file.filename.endswith(".smk"):
                         file_info["is_snakemake"] = True
@@ -119,6 +124,17 @@ class GitAnalysis:
         self.count_commits = len(self.commits)
 
         return self.count_commits
+
+
+    def _extract_file_extensions(self, filename=None):
+        """
+        Extract the file extension from a file name.
+        """
+        filename = validator.validate(filename, str, required=True)
+        parts = filename.split('.')
+        if len(parts) > 1:
+            return parts[-1].lower()
+        return None
 
 
     def _extract_snakemake_rule_names_from_code(self, code):
