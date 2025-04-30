@@ -21,8 +21,9 @@ DB_CONFIG                 = config["database_config"][DB_ENGINE]
 BLACKLIST                 = config["snakemake-catalog-urls"]["blacklist"]
 SKIPS                     = config["snakemake-catalog-urls"]["skips"]
 
-WORKDIR = config["result_dir"] + f"/{GIT_PROVIDER}_{GIT_SEARCH_START_DATE_STR}_{GIT_SEARCH_END_DATE_STR}"
-CLONEDIR = config["result_dir"] + f"/{GIT_PROVIDER}_{GIT_SEARCH_START_DATE_STR}_{GIT_SEARCH_END_DATE_STR}/cloned_repositories"
+WORKDIR     = config["result_dir"] + f"/{GIT_PROVIDER}_{GIT_SEARCH_START_DATE_STR}_{GIT_SEARCH_END_DATE_STR}"
+CLONEDIR    = config["result_dir"] + f"/{GIT_PROVIDER}_{GIT_SEARCH_START_DATE_STR}_{GIT_SEARCH_END_DATE_STR}/cloned_repositories"
+METADATADIR = config["result_dir"] + f"/{GIT_PROVIDER}_{GIT_SEARCH_START_DATE_STR}_{GIT_SEARCH_END_DATE_STR}/metadata"
 NOW     = util.now()
 
 storage_handler = storage.Storage(logger=printlog, engine="file", storage_config={"is_absolute": True, "mkdir_ok": True})
@@ -88,9 +89,6 @@ rule get_issues_extras:
         WORKDIR + "/.done_get_issues",
         WORKDIR + "/repositories_with_issues.txt"
 
-    params:
-        issues_dir = WORKDIR + "/api_responses_by_repository",
-
     output:
         WORKDIR + "/.done_get_issues_extras",
 
@@ -107,10 +105,10 @@ rule get_issues_extras:
             issues_with_comments = list()
             all_pullrequests     = list()
             all_events           = list()
-            file_issues          = f"{params.issues_dir}/{owner}_{repo}_issues.json"
-            file_comments        = f"{params.issues_dir}/{owner}_{repo}_issues_comments.json"
-            file_pullrequests    = f"{params.issues_dir}/{owner}_{repo}_issues_pullrequests.json"
-            file_events          = f"{params.issues_dir}/{owner}_{repo}_issues_events.json"
+            file_issues          = f"{METADATADIR}/{owner}_{repo}_issues.json"
+            file_comments        = f"{METADATADIR}/{owner}_{repo}_issues_comments.json"
+            file_pullrequests    = f"{METADATADIR}/{owner}_{repo}_issues_pullrequests.json"
+            file_events          = f"{METADATADIR}/{owner}_{repo}_issues_events.json"
 
             all_issues = storage_handler.read(file_issues, from_json=True)
             if all_issues is None:
@@ -208,7 +206,6 @@ rule get_issues:
 
     params:
         search_result_files = expand(WORKDIR + "/search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES),
-        issues_dir = WORKDIR + "/api_responses_by_repository",
 
     output:
         WORKDIR + "/.done_get_issues",
@@ -232,7 +229,7 @@ rule get_issues:
                 full_name = repo_details["full_name"]
                 owner, repo = full_name.split("/")
 
-                if os.path.exists(f"{params.issues_dir}/{owner}_{repo}_issues.json"):
+                if os.path.exists(f"{METADATADIR}/{owner}_{repo}_issues.json"):
                     printlog.info("Issues are already saved for %s.", full_name)
                     issues_repositories.append(full_name)
                     continue
@@ -254,7 +251,7 @@ rule get_issues:
                     printlog.debug("No issues in %s.", full_name)
                     continue
 
-                storage_handler.write(f"{params.issues_dir}/{owner}_{repo}_issues.json", issues["items"], to_json=True)
+                storage_handler.write(f"{METADATADIR}/{owner}_{repo}_issues.json", issues["items"], to_json=True)
                 printlog.info("Saved issues for %s, total: %d", full_name, issues["total_count"])
                 issues_repositories.append(f"{owner}/{repo}")
 
