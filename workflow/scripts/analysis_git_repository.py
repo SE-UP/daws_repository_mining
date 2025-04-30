@@ -1,6 +1,6 @@
 """This module contains the GitAnalysis class to analyze Git repositories."""
 import logging
-import input_validator
+import scripts.input_validator as input_validator
 from datetime import datetime
 from pydriller import Repository
 from pydriller.metrics.process.change_set import ChangeSet
@@ -75,8 +75,9 @@ class GitAnalysis:
                         "change_type": file.change_type.name,
                         "n_added_lines": file.added_lines,
                         "n_deleted_lines": file.deleted_lines,
-                        "methods": file.methods,
-                        "changed_methods": file.changed_methods,
+                        "methods": [vars(method) for method in file.methods],
+                        "methods_before": [vars(method) for method in file.methods_before],
+                        "changed_methods": [vars(method) for method in file.changed_methods],
                         "n_lines": file.nloc,
                         "complexity": file.complexity,
                         "n_tokens": file.token_count
