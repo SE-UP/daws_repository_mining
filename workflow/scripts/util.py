@@ -121,3 +121,20 @@ def merge_skiplist(file_blacklist=None, file_skiplist=None):
             skiplist = [repo['full_name'] for repo in json_data]
 
     return list(set(blacklist) | set(skiplist))
+
+
+def convert_list_to_dict(src_list=None, key=None):
+    """
+    Convert a list a dictionary with the specified key.
+    :param src_list: The source list.
+    :param key: The key to use for the dictionary.
+    :return: The converted dictionary.
+    """
+    if not src_list or not key:
+        return {}
+
+    new_dict = {}
+    for element in src_list:
+        new_dict[element[key]] = element
+
+    return new_dict
