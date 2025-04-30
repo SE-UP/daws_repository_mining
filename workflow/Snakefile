@@ -27,7 +27,7 @@ NOW     = util.now()
 
 storage_handler = storage.Storage(logger=printlog, engine="file", storage_config={"is_absolute": True, "mkdir_ok": True})
 
-git_handler = git_providers.GitProvider(
+gitapi_handler = git_providers.GitProvider(
     provider=GIT_PROVIDER,
     token=GIT_PROVIDER_TOKEN,
     logger=printlog)
@@ -136,7 +136,7 @@ rule get_issues_extras:
                     issue_number = pullrequest["number"]
                     details = None
                     try:
-                        details = git_handler.get_pullrequest_details(owner, repo, issue_number)
+                        details = gitapi_handler.get_pullrequest_details(owner, repo, issue_number)
                     except Exception as e:
                         printlog.error("Failed to get pull request details for %s/%s#%d: %s",
                                         owner, repo, issue_number, e)
@@ -155,7 +155,7 @@ rule get_issues_extras:
                     issue_number = issue["number"]
                     comments = None
                     try:
-                        comments = git_handler.get_issue_comments(owner, repo, issue_number)
+                        comments = gitapi_handler.get_issue_comments(owner, repo, issue_number)
                     except Exception as e:
                         printlog.error("Failed to get comments for %s/%s#%d: %s",
                                         owner, repo, issue_number, e)
@@ -179,7 +179,7 @@ rule get_issues_extras:
                     issue_number = issue["number"]
                     events = None
                     try:
-                        events = git_handler.get_issue_events(owner, repo, issue_number)
+                        events = gitapi_handler.get_issue_events(owner, repo, issue_number)
                     except Exception as e:
                         printlog.error("Failed to get events for %s/%s#%d: %s",
                                         owner, repo, issue_number, e)
@@ -246,7 +246,7 @@ rule get_issues:
 
                 issues = None
                 try:
-                    issues = git_handler.get_issues(owner, repo)
+                    issues = gitapi_handler.get_issues(owner, repo)
                 except Exception as e:
                     printlog.error("Failed to get issues for %s: %s", full_name, e)
 
@@ -294,7 +294,7 @@ rule clone_repositories:
 
         storage_handler.write(output[1], repositories_to_clone)
 
-        cloned_repositories = git_handler.clone_repositories(CLONEDIR,
+        cloned_repositories = gitapi_handler.clone_repositories(CLONEDIR,
                                 repositories_to_clone)
 
         printlog.info("Number of cloned repositories: %s", len(cloned_repositories))
@@ -356,7 +356,7 @@ rule search_repositories:
             if os.path.exists(output_file):
                 continue
 
-            result = git_handler.search_repositories(query=query_string)
+            result = gitapi_handler.search_repositories(query=query_string)
             storage_handler.write(output_file, result, to_json=True)
 
         items = []
