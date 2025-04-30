@@ -64,22 +64,8 @@ class GitAnalysis:
                     "dmm_unit_interfacing" : commit.dmm_unit_interfacing # float
                 }
 
-                snakemake_included_rules = []
-                snakemake_included_scripts = []
-                snakemake_irregular_rule_files = []
-                snakemake_rule_files = []
-
                 if extend_for == "snakemake":
-                    commit_info["snakemake_related"] = False
-                    commit_info["snakemake_modules_from_code"]        = []
-                    commit_info["snakemake_modules_from_code_before"] = []
-                    commit_info["snakemake_rules_from_code"]          = []
-                    commit_info["snakemake_rules_from_code_before"]   = []
-                    commit_info["snakemake_n_modules_added"]   = 0
-                    commit_info["snakemake_n_modules_removed"] = 0
-                    commit_info["snakemake_n_rules_added"]     = 0
-                    commit_info["snakemake_n_rules_removed"]   = 0
-
+                    commit_info = self._extend_commit_info_for_snakemake(commit_info)
 
                 for file in commit.modified_files:
                     file_info = {
@@ -104,82 +90,13 @@ class GitAnalysis:
                         commit_info["change_types"].append(file.change_type.name)
 
                     if extend_for == "snakemake":
-                        file_info["snakemake_related"] = False
-                        file_info["snakemake_modules_from_code"]        = []
-                        file_info["snakemake_modules_from_code_before"] = []
-                        file_info["snakemake_rules_from_code"]          = []
-                        file_info["snakemake_rules_from_code_before"]   = []
-                        file_info["snakemake_n_modules_added"]   = 0
-                        file_info["snakemake_n_modules_removed"] = 0
-                        file_info["snakemake_n_rules_added"]     = 0
-                        file_info["snakemake_n_rules_removed"]   = 0
+                        file_info = self._extend_file_info_for_snakemake(file_info)
+                        commit_info, file_info = self._extract_commit_for_snakemake(commit_info, file_info, file)
 
-                        if file.filename.lower() == "snakefile" or file.filename.endswith(".smk"):
-                            file_info["snakemake_related"] = True
-                            commit_info["snakemake_related"] = True
-                            snakemake_rule_files.append(file.new_path)
-                            source_code = file.source_code if file.source_code else ""
-                            source_code_before = file.source_code_before if file.source_code_before else ""
-
-                            snakemake_irregular_rule_files.extend(
-                                self._get_snakemake_irregular_rule_files_from_code(source_code))
-
-                            snakemake_included_rules.extend(
-                                self._get_snakemake_included_files_from_code(source_code))
-
-                            rules_from_code = self._get_snakemake_rule_names_from_code(source_code)
-                            rules_from_code_before = self._get_snakemake_rule_names_from_code(source_code_before)
-                            modules_from_code = self._get_snakemake_module_names_from_code(source_code)
-                            modules_from_code_before = self._get_snakemake_module_names_from_code(source_code_before)
-
-                            file_info["snakemake_rules_from_code"] = rules_from_code
-                            file_info["snakemake_rules_from_code_before"] = rules_from_code_before
-                            file_info["snakemake_modules_from_code"] = modules_from_code
-                            file_info["snakemake_modules_from_code_before"] = modules_from_code_before
-                            commit_info["snakemake_rules_from_code"].extend(rules_from_code)
-                            commit_info["snakemake_rules_from_code_before"].extend(rules_from_code_before)
-                            commit_info["snakemake_modules_from_code"].extend(modules_from_code)
-                            commit_info["snakemake_modules_from_code_before"].extend(modules_from_code_before)
-
-                            if rules_from_code:
-                                for rule in rules_from_code:
-                                    if rule not in rules_from_code_before:
-                                        file_info["snakemake_n_rules_added"] += 1
-
-                            if rules_from_code_before:
-                                for rule in rules_from_code_before:
-                                    if rule not in rules_from_code:
-                                        file_info["snakemake_n_rules_removed"] += 1
-
-                            if modules_from_code:
-                                for module in modules_from_code:
-                                    if module not in modules_from_code_before:
-                                        file_info["snakemake_n_rules_added"] += 1
-
-                            if modules_from_code_before:
-                                for module in modules_from_code_before:
-                                    if module not in modules_from_code:
-                                        file_info["snakemake_n_rules_removed"] += 1
-
-                        elif file.new_path:
-                            if file.new_path.lower().startswith("scripts/") or "/scripts/" in file.new_path.lower():
-                                snakemake_included_scripts.append(file.new_path)
-
-                        commit_info["files"].append(file_info)
+                    commit_info["files"].append(file_info)
 
                 if extend_for == "snakemake":
-                    commit_info["snakemake_included_rules"]   = list(set(snakemake_included_rules))
-                    commit_info["snakemake_included_scripts"] = list(set(snakemake_included_scripts))
-                    commit_info["snakemake_irregular_rule_files"] = list(set(snakemake_irregular_rule_files))
-                    commit_info["snakemake_rule_files"] = list(set(snakemake_rule_files))
-                    commit_info["snakemake_rules_from_code"] = list(set(commit_info["snakemake_rules_from_code"]))
-                    commit_info["snakemake_rules_from_code_before"] = list(set(commit_info["snakemake_rules_from_code_before"]))
-                    commit_info["snakemake_modules_from_code"] = list(set(commit_info["snakemake_modules_from_code"]))
-                    commit_info["snakemake_modules_from_code_before"] = list(set(commit_info["snakemake_modules_from_code_before"]))
-                    commit_info["snakemake_n_rules_added"]     = len(set(commit_info["snakemake_rules_from_code"]) - set(commit_info["snakemake_rules_from_code_before"]))
-                    commit_info["snakemake_n_rules_removed"]   = len(set(commit_info["snakemake_rules_from_code_before"]) - set(commit_info["snakemake_rules_from_code"]))
-                    commit_info["snakemake_n_modules_added"]   = len(set(commit_info["snakemake_modules_from_code"]) - set(commit_info["snakemake_modules_from_code_before"]))
-                    commit_info["snakemake_n_modules_removed"] = len(set(commit_info["snakemake_modules_from_code_before"]) - set(commit_info["snakemake_modules_from_code"]))
+                    commit_info = self._post_process_commit_info_for_snakemake(commit_info)
 
                 if not self.date_first_commit or commit.committer_date < self.date_first_commit:
                     self.date_first_commit = commit.committer_date
@@ -197,6 +114,95 @@ class GitAnalysis:
         return self.count_commits
 
 
+    def _post_process_commit_info_for_snakemake(self, commit_info):
+        commit_info["snakemake_included_rules"]         = list(set(commit_info["snakemake_included_rules"]))
+        commit_info["snakemake_included_scripts"]       = list(set(commit_info["snakemake_included_scripts"]))
+        commit_info["snakemake_irregular_rule_files"]   = list(set(commit_info["snakemake_irregular_rule_files"]))
+        commit_info["snakemake_rule_files"]             = list(set(commit_info["snakemake_rule_files"]))
+        commit_info["snakemake_rules_from_code"]        = list(set(commit_info["snakemake_rules_from_code"]))
+        commit_info["snakemake_rules_from_code_before"] = list(set(commit_info["snakemake_rules_from_code_before"]))
+        commit_info["snakemake_modules_from_code"]      = list(set(commit_info["snakemake_modules_from_code"]))
+        commit_info["snakemake_modules_from_code_before"] = list(set(commit_info["snakemake_modules_from_code_before"]))
+        commit_info["snakemake_n_rules_added"]     = len(set(commit_info["snakemake_rules_from_code"]) - set(commit_info["snakemake_rules_from_code_before"]))
+        commit_info["snakemake_n_rules_removed"]   = len(set(commit_info["snakemake_rules_from_code_before"]) - set(commit_info["snakemake_rules_from_code"]))
+        commit_info["snakemake_n_modules_added"]   = len(set(commit_info["snakemake_modules_from_code"]) - set(commit_info["snakemake_modules_from_code_before"]))
+        commit_info["snakemake_n_modules_removed"] = len(set(commit_info["snakemake_modules_from_code_before"]) - set(commit_info["snakemake_modules_from_code"]))
+        return commit_info
+
+
+    def _extract_commit_for_snakemake(self, commit_info, file_info, file):
+        if file.filename.lower() == "snakefile" or file.filename.endswith(".smk"):
+            file_info["snakemake_related"] = True
+            commit_info["snakemake_related"] = True
+            commit_info["snakemake_rule_files"].append(file.new_path)
+            source_code = file.source_code if file.source_code else ""
+            source_code_before = file.source_code_before if file.source_code_before else ""
+
+            commit_info["snakemake_irregular_rule_files"].extend(
+                self._get_snakemake_irregular_rule_files_from_code(source_code))
+
+            commit_info["snakemake_included_rules"].extend(
+                self._get_snakemake_included_files_from_code(source_code))
+
+            rules_from_code = self._get_snakemake_rule_names_from_code(source_code)
+            rules_from_code_before = self._get_snakemake_rule_names_from_code(source_code_before)
+            modules_from_code = self._get_snakemake_module_names_from_code(source_code)
+            modules_from_code_before = self._get_snakemake_module_names_from_code(source_code_before)
+
+            file_info["snakemake_rules_from_code"] = rules_from_code
+            file_info["snakemake_rules_from_code_before"] = rules_from_code_before
+            file_info["snakemake_modules_from_code"] = modules_from_code
+            file_info["snakemake_modules_from_code_before"] = modules_from_code_before
+            commit_info["snakemake_rules_from_code"].extend(rules_from_code)
+            commit_info["snakemake_rules_from_code_before"].extend(rules_from_code_before)
+            commit_info["snakemake_modules_from_code"].extend(modules_from_code)
+            commit_info["snakemake_modules_from_code_before"].extend(modules_from_code_before)
+
+            if rules_from_code:
+                for rule in rules_from_code:
+                    if rule not in rules_from_code_before:
+                        file_info["snakemake_n_rules_added"] += 1
+
+            if rules_from_code_before:
+                for rule in rules_from_code_before:
+                    if rule not in rules_from_code:
+                        file_info["snakemake_n_rules_removed"] += 1
+
+            if modules_from_code:
+                for module in modules_from_code:
+                    if module not in modules_from_code_before:
+                        file_info["snakemake_n_rules_added"] += 1
+
+            if modules_from_code_before:
+                for module in modules_from_code_before:
+                    if module not in modules_from_code:
+                        file_info["snakemake_n_rules_removed"] += 1
+
+        elif file.new_path:
+            if file.new_path.lower().startswith("scripts/") or "/scripts/" in file.new_path.lower():
+                commit_info["snakemake_included_scripts"].append(file.new_path)
+
+        return commit_info, file_info
+
+
+    def _extend_commit_info_for_snakemake(self, commit_info):
+        commit_info["snakemake_related"] = False
+        commit_info["snakemake_modules_from_code"]        = []
+        commit_info["snakemake_modules_from_code_before"] = []
+        commit_info["snakemake_rules_from_code"]          = []
+        commit_info["snakemake_rules_from_code_before"]   = []
+        commit_info["snakemake_n_modules_added"]   = 0
+        commit_info["snakemake_n_modules_removed"] = 0
+        commit_info["snakemake_n_rules_added"]     = 0
+        commit_info["snakemake_n_rules_removed"]   = 0
+        commit_info["snakemake_included_rules"] = []
+        commit_info["snakemake_included_scripts"] = []
+        commit_info["snakemake_irregular_rule_files"] = []
+        commit_info["snakemake_rule_files"] = []
+
+        return commit_info
+
+
     def _get_snakemake_irregular_rule_files_from_code(self, code=""):
         """
         Return the list if there are included files having no .smk extension.
@@ -210,6 +216,19 @@ class GitAnalysis:
                     irregular_rule_files.append(included_file)
 
         return irregular_rule_files
+
+
+    def _extend_file_info_for_snakemake(self, file_info):
+        file_info["snakemake_related"] = False
+        file_info["snakemake_modules_from_code"]        = []
+        file_info["snakemake_modules_from_code_before"] = []
+        file_info["snakemake_rules_from_code"]          = []
+        file_info["snakemake_rules_from_code_before"]   = []
+        file_info["snakemake_n_modules_added"]   = 0
+        file_info["snakemake_n_modules_removed"] = 0
+        file_info["snakemake_n_rules_added"]     = 0
+        file_info["snakemake_n_rules_removed"]   = 0
+        return file_info
 
 
     def _get_snakemake_included_files_from_code(self, code=""):
