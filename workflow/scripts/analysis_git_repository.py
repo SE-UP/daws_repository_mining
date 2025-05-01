@@ -75,9 +75,9 @@ class GitAnalysis:
                         "change_type": file.change_type.name,
                         "n_added_lines": file.added_lines,
                         "n_deleted_lines": file.deleted_lines,
-                        "methods": [vars(method) for method in file.methods],
-                        "methods_before": [vars(method) for method in file.methods_before],
-                        "changed_methods": [vars(method) for method in file.changed_methods],
+                        #"methods": [vars(method) for method in file.methods],
+                        #"methods_before": [vars(method) for method in file.methods_before],
+                        #"changed_methods": [vars(method) for method in file.changed_methods],
                         "n_lines": file.nloc,
                         "complexity": file.complexity,
                         "n_tokens": file.token_count
@@ -91,7 +91,7 @@ class GitAnalysis:
                         commit_info["change_types"].append(file.change_type.name)
 
                     if extend_for == "snakemake":
-                        file_info = self._extend_file_info_for_snakemake(file_info)
+                        file_info = self._initialize_file_info_for_snakemake(file_info)
                         commit_info, file_info = self._extract_commit_for_snakemake(commit_info, file_info, file)
 
                     commit_info["files"].append(file_info)
@@ -132,7 +132,14 @@ class GitAnalysis:
 
 
     def _extract_commit_for_snakemake(self, commit_info, file_info, file):
-        if file.filename.lower() == "snakefile" or file.filename.endswith(".smk"):
+        is_snakemake_rule_file = (
+            file.filename.lower() == "snakefile" or
+            file.filename.lower().endswith(".smk") or
+            file.filename.lower().endswith(".snakefile") or
+            file.filename.lower().endswith(".rules")
+        )
+
+        if is_snakemake_rule_file:
             file_info["snakemake_related"] = True
             commit_info["snakemake_related"] = True
             commit_info["snakemake_rule_files"].append(file.new_path)
@@ -180,8 +187,10 @@ class GitAnalysis:
                         file_info["snakemake_n_rules_removed"] += 1
 
         elif file.new_path:
-            if file.new_path.lower().startswith("scripts/") or "/scripts/" in file.new_path.lower():
+            if file.new_path.lower().startswith("scripts/") or file.new_path.lower().startswith("workflow/scripts/"):
                 commit_info["snakemake_included_scripts"].append(file.new_path)
+                commit_info["snakemake_related"] = True
+                file_info["snakemake_related"] = True
 
         return commit_info, file_info
 
@@ -219,7 +228,7 @@ class GitAnalysis:
         return irregular_rule_files
 
 
-    def _extend_file_info_for_snakemake(self, file_info):
+    def _initialize_file_info_for_snakemake(self, file_info):
         file_info["snakemake_related"] = False
         file_info["snakemake_modules_from_code"]        = []
         file_info["snakemake_modules_from_code_before"] = []
