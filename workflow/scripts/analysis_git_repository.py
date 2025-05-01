@@ -37,7 +37,7 @@ class GitAnalysis:
         extend_for = extend_for.lower()
 
         try:
-            for commit in Repository(self.repo_path).traverse_commits():
+            for commit in Repository(self.repo_path, num_workers=16).traverse_commits():
                 self.log.debug("Extracting a commit: %s", commit.hash)
 
                 commit_info = {
