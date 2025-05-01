@@ -8,22 +8,64 @@ import requests
 LOG_FORMAT = "[%(asctime)s] %(levelname)s - %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
-def str_to_date(date_str, fmt="%Y-%m-%d"):
+def str_to_datetime(date_str=None, fmt="%Y-%m-%d"):
     """
     Convert a string to a date object.
     :param date_str: The date string.
     :param format: The format of the date string.
     :return: The date object.
     """
-    return datetime.strptime(date_str, fmt).date()
+    if not date_str:
+        return None
+    return datetime.strptime(date_str, fmt)
 
 
-def now():
+def epoch_to_str(epoch=None, fmt="%Y-%m-%dT%H:%M:%S %z"):
+    """
+    Convert an epoch time to a string.
+    :param epoch: The epoch time.
+    :param format: The format of the date string.
+    :return: The date string.
+    """
+    if not epoch or epoch < 0:
+        return None
+
+    return datetime.fromtimestamp(epoch).strftime(fmt)
+
+
+def convert_seconds(seconds=None, unit="d"):
+    """
+    Convert seconds to a specified time unit.
+    :param seconds: The number of seconds.
+    :param unit: The time unit to convert to. "d" (days), "h" (hours), "m" (minutes).
+    :return: The converted time.
+    """
+    if not seconds or seconds < 0:
+        return None
+
+    if unit == "d":
+        return int(seconds / (24 * 3600))
+    elif unit == "h":
+        return int(seconds / 3600)
+    elif unit == "m":
+        return int(seconds / 60)
+    else:
+        raise ValueError("Invalid unit. Use 'd', 'h', or 'm'.")
+
+
+def now(is_epoch=False, fractional=False, fmt="%Y-%m-%dT%H:%M:%S %z"):
     """
     Get the current date and time.
     :return: The current date and time
     """
-    return datetime.now()
+    if is_epoch:
+        if fractional:
+            return datetime.now().timestamp()
+        else:
+            # Return the epoch time as an integer
+            return int(datetime.now().timestamp())
+    else:
+        return datetime.now().strftime(fmt)
 
 
 def setup_logger(log_level="INFO"):
