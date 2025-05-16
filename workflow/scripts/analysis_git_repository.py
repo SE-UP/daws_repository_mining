@@ -1,6 +1,7 @@
 """This module contains the GitAnalysis class to analyze Git repositories."""
 import logging
 import scripts.input_validator as input_validator
+import scripts.util as util
 from datetime import datetime
 from pydriller import Repository
 from pydriller.metrics.process.change_set import ChangeSet
@@ -381,3 +382,161 @@ class GitAnalysis:
         }
 
         return process_metrics
+
+
+    def generate_event_logs_for_evolution_cycle(self, cycle_info, issues,
+                                                 comments, events, pullrequests,
+                                                 commits):
+
+        begin_epoch = cycle_info["begin"]["epoch"]
+        end_epoch   = cycle_info["end"]["epoch"]
+
+        event_logs = []
+        commits_preprocessed = []
+        commit_parents = {}
+        commits_hashes = []
+
+        for issue in issues:
+            created_at = util.str_to_datetime(date_str=issue["created_at"], fmt="%Y-%m-%dT%H:%M:%SZ")
+            if not created_at:
+                self.log.warning("Issue %s has no created_at date", issue["number"])
+                continue
+
+            created_at_epoch = int(created_at.timestamp())
+            closed_at = None
+            closed_at_epoch = None
+            if issue.get("closed_at"):
+                closed_at = util.str_to_datetime(date_str=issue["closed_at"], fmt="%Y-%m-%dT%H:%M:%SZ")
+
+                if not closed_at:
+                    self.log.warning("Issue %s has no closed_at date", issue["number"])
+                    continue
+
+                closed_at_epoch = int(closed_at.timestamp())
+
+            if created_at_epoch >= begin_epoch and created_at_epoch <= end_epoch:
+                event_logs.append({
+                    "case_id": f"Issue-{issue['number']}",
+                    "activity": "Issue Created",
+                    "timestamp": created_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "user": issue["user"]["login"]
+                })
+
+            if closed_at and closed_at_epoch >= begin_epoch and closed_at_epoch <= end_epoch:
+                event_logs.append({
+                    "case_id": f"Issue-{issue['number']}",
+                    "activity": "Issue Closed",
+                    "timestamp": closed_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "user": issue["user"]["login"],
+                })
+
+        for comment in comments:
+            created_at = util.str_to_datetime(date_str=comment["created_at"], fmt="%Y-%m-%dT%H:%M:%SZ")
+            if not created_at:
+                self.log.warning("Comment %s has no created_at date", comment["id"])
+                continue
+
+            created_at_epoch = int(created_at.timestamp())
+            if created_at_epoch >= begin_epoch and created_at_epoch <= end_epoch:
+                event_logs.append({
+                    "case_id": f"Issue-{comment['issue_url'].split('/')[-1]}",
+                    "activity": "Issue Commented",
+                    "timestamp": created_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "user": comment["user"]["login"]
+                })
+
+        for event in events:
+            created_at = util.str_to_datetime(date_str=event["created_at"], fmt="%Y-%m-%dT%H:%M:%SZ")
+            if not created_at:
+                self.log.warning("Event %s has no created_at date", event["id"])
+                continue
+
+            created_at_epoch = int(created_at.timestamp())
+            if created_at_epoch >= begin_epoch and created_at_epoch <= end_epoch:
+                user = None
+                if event["actor"] and "login" in event["actor"]:
+                    user = event["actor"]["login"]
+                event_logs.append({
+                    "case_id": f"Issue-{event['issue']['number']}",
+                    "activity": event["event"],
+                    "timestamp": created_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "user": user
+                })
+
+        for commit_hash in sorted(commits, key=lambda k: commits[k]['committer_epoch']):
+            commit = commits[commit_hash]
+            if commit_hash in commits_preprocessed:
+                continue
+            committed_epoch = int(commit["committer_epoch"])
+            committed_at = util.epoch_to_str(epoch=committed_epoch)
+
+            commits_hashes.append(commit_hash)
+
+            if "parents" in commit:
+                if len(commit["parents"]) > 0:
+                    commit_parents[commit_hash] = commit["parents"]
+
+            if committed_epoch >= begin_epoch and committed_epoch <= end_epoch:
+                activity = "Committed"
+                if cycle_info["n_snakemake_rules_added"] > 0 or cycle_info["n_snakemake_modules_added"] > 0:
+                    activity = "Committed-Snakemake"
+                event_logs.append({
+                    "case_id": f"Commit-{commit_hash[:7]}",
+                    "activity": activity,
+                    "timestamp": committed_at,
+                    "user": commit["committer"]
+                })
+
+        for pr in pullrequests:
+            created_at = util.str_to_datetime(date_str=pr["created_at"], fmt="%Y-%m-%dT%H:%M:%SZ")
+            if not created_at:
+                self.log.warning("Pull Request %s has no created_at date", pr["number"])
+                continue
+            created_at_epoch = int(created_at.timestamp())
+
+            if created_at_epoch >= begin_epoch and created_at_epoch <= end_epoch:
+                event_logs.append({
+                    "case_id": f"Issue-{pr['number']}",
+                    "activity": "Pull Request Opened",
+                    "timestamp": created_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "user": pr["user"]["login"]
+                })
+
+            # Find the corresponding commits
+            merge_commit_sha = pr.get("merge_commit_sha")
+            if merge_commit_sha and merge_commit_sha in commit_parents:
+                parents = commit_parents[merge_commit_sha]
+                if len(parents) == 1:
+                    event_logs.append({
+                        "case_id": f"Issue-{pr['number']}",
+                        "activity": "Committed",
+                        "timestamp": commits[parents[0]]["committer_date"],
+                        "user": pr["user"]["login"]
+                    })
+                    commits_preprocessed.append(parents[0])
+                elif len(parents) == 2:
+                    begin_commit = parents[0]
+                    end_commit = parents[1]
+                    begin_index = commits_hashes.index(begin_commit)
+                    end_index = commits_hashes.index(end_commit)
+                    # printlog(f"Merge commit {merge_commit_sha} has parents: begin - {begin_commit} ({begin_index}) and end - {end_commit} ({end_index})")
+
+                    child_commits = []
+                    for i in range(begin_index, end_index):
+                        child_commits.append(commits_hashes[i])
+
+                    for commit in child_commits:
+                        # printlog(f"Commit {commit} is a child of {begin_commit} and {end_commit}")
+                        try:
+                            event_logs.append({
+                                "case_id": f"Issue-{pr['number']}",
+                                "activity": "Committed",
+                                "timestamp": commits[commit]["committer_date"],
+                                "user": pr["user"]["login"]
+                            })
+                            commits_preprocessed.append(commit)
+                        except KeyError:
+                            self.log.warning("Commit %s not found in commits", commit)
+                            continue
+
+        return sorted(event_logs, key=lambda x: x["timestamp"])

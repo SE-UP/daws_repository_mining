@@ -28,10 +28,12 @@ class Validator:
         return value
 
 
-    def path_dir(self, given_path=None, create=False):
+    def path_dir(self, given_path=None, create=False, required=True):
         """Validate a directory path. Return the path if it is valid."""
         if given_path is None:
-            raise ValueError("path parameter is required.")
+            if required:
+                raise ValueError("Path parameter is required.")
+            return None
 
         if not os.path.exists(given_path):
             if create:

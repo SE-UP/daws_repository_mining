@@ -49,6 +49,8 @@ rule migrate_jsonfiles_to_database:
         WORKDIR + "/.done_get_issues",
         WORKDIR + "/.done_get_issues_extras",
         WORKDIR + "/.done_extract_git_repository_metadata",
+        WORKDIR + "/.done_rebuild_git_repositories_info",
+        WORKDIR + "/.done_generate_event_logs_for_evolution_cycles",
 
     params:
         json_files = expand(WORKDIR + "/search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES),
@@ -84,6 +86,86 @@ rule migrate_jsonfiles_to_database:
         storage_handler.write(output[0], "")
 
 
+rule generate_event_logs_for_evolution_cycles:
+    input:
+        WORKDIR + "/.done_extract_git_repository_metadata",
+        WORKDIR + "/.done_rebuild_git_repositories_info",
+        WORKDIR + "/repositories_to_clone.txt",
+
+    output:
+        WORKDIR + "/.done_generate_event_logs_for_evolution_cycles",
+
+    run:
+        cloned_repositories = storage_handler.read(input[2], multiple_lines=True)
+
+        repo_path = os.path.join(WORKDIR, "cloned_repositories")
+        gitrepo_handler = analysis_git.GitAnalysis(logger=printlog, repo_path=repo_path)
+        for i_repo, repo_fullname in enumerate(cloned_repositories):
+            printlog.info("(%d/%d) Processing %s...",
+                            i_repo+1, len(cloned_repositories), repo_fullname)
+            owner, repo_name = repo_fullname.strip().split("/")
+            if not os.path.exists(f"{METADATADIR}/{owner}_{repo_name}_info.json"):
+                printlog.error("Repository metadata is not available: %s", repo_fullname)
+                continue
+
+            repo_info = storage_handler.read(f"{METADATADIR}/{owner}_{repo_name}_info.json", from_json=True)
+
+            try:
+                issues = storage_handler.read(f"{METADATADIR}/{owner}_{repo_name}_issues.json", from_json=True)
+            except Exception as e:
+                issues = []
+
+            try:
+                comments = storage_handler.read(f"{METADATADIR}/{owner}_{repo_name}_issues_comments.json", from_json=True)
+            except Exception as e:
+                comments = []
+
+            try:
+                events = storage_handler.read(f"{METADATADIR}/{owner}_{repo_name}_issues_events.json", from_json=True)
+            except Exception as e:
+                events = []
+
+            try:
+                pullrequests = storage_handler.read(f"{METADATADIR}/{owner}_{repo_name}_issues_pullrequests.json", from_json=True)
+            except Exception as e:
+                pullrequests = []
+
+            try:
+                commits = storage_handler.read(f"{METADATADIR}/{owner}_{repo_name}_commits.json", from_json=True)
+            except Exception as e:
+                commits = []
+
+            if len(repo_info["evolution_cycles"]) == 0:
+                printlog.warning("(%d/%d) No evolution cycles for %s",
+                                i_repo+1, len(cloned_repositories), repo_fullname)
+                continue
+            else:
+                printlog.info("(%d/%d) %d evolution cycles for %s",
+                                i_repo+1, len(cloned_repositories),
+                                len(repo_info["evolution_cycles"]), repo_fullname)
+
+            printlog.info("(%d/%d) Generating event logs for %s...",
+                            i_repo+1, len(cloned_repositories), repo_fullname)
+
+            for i_cycle, cycle_info in enumerate(repo_info["evolution_cycles"]):
+                event_logs = gitrepo_handler.generate_event_logs_for_evolution_cycle(
+                    cycle_info=cycle_info,
+                    issues=issues,
+                    comments=comments,
+                    events=events,
+                    pullrequests=pullrequests,
+                    commits=commits
+                )
+
+                storage_handler.write(f"{METADATADIR}/{owner}_{repo_name}_evolution_cycle.{i_cycle+1}.event_logs.json",
+                                    event_logs, to_json=True)
+                printlog.info("- (%d/%d) Saved %d event logs for %s",
+                                i_cycle+1, len(repo_info["evolution_cycles"]),
+                                len(event_logs), repo_fullname)
+
+        storage_handler.write(output[0], "")
+
+
 rule rebuild_git_repositories_info:
     input:
         WORKDIR + "/.done_extract_git_repository_metadata",
@@ -108,7 +190,7 @@ rule rebuild_git_repositories_info:
             key="full_name"
         )
 
-        for repo_fullname in cloned_repositories:
+        for i_repo, repo_fullname in enumerate(cloned_repositories):
             owner, repo_name = repo_fullname.strip().split("/")
             file_commit_metadata = f"{METADATADIR}/{owner}_{repo_name}_commits.json"
 
@@ -122,14 +204,18 @@ rule rebuild_git_repositories_info:
                 "repo_full_name": repo_fullname,
             }
 
+            printlog.info("(%d/%d) Processing %s...",
+                            i_repo+1, len(cloned_repositories), repo_fullname)
+
             new_repo_info = repo_info | repositories_info_from_git_provider[repo_fullname]
 
             commits = storage_handler.read(file_commit_metadata, from_json=True)
+            n_commits = len(commits)
 
-            new_repo_info["n_commits"] = len(commits)
+            new_repo_info["n_commits"] = n_commits
             new_repo_info["n_commits_snakemake_related"] = 0
-            new_repo_info["n_evalution_cycles"] = 0
-            new_repo_info["evalution_cycles"] = []
+            new_repo_info["n_evolution_cycles"] = 0
+            new_repo_info["evolution_cycles"] = []
             new_repo_info["first_commit_at_epoch"] = util.now(is_epoch=True)
             new_repo_info["last_commit_at_epoch"] = 0
             authors = set()
@@ -142,8 +228,15 @@ rule rebuild_git_repositories_info:
             cycle_n_snakemake_rules_removed = 0
             cycle_n_snakemake_modules_added = 0
             cycle_n_snakemake_modules_removed = 0
+            cycle_n_snakemake_rules_added_on_the_day = 0
+            cycle_n_snakemake_rules_removed_on_the_day = 0
+            cycle_n_snakemake_modules_added_on_the_day = 0
+            cycle_n_snakemake_modules_removed_on_the_day = 0
+            is_last_commit_of_the_day = False
+
             file_extensions = []
-            for commit_hash in sorted(commits, key=lambda k: commits[k]['committer_epoch']):
+            commit_hashes_sorted_by_epoch = sorted(commits, key=lambda k: commits[k]['committer_epoch'])
+            for i_commit, commit_hash in enumerate(commit_hashes_sorted_by_epoch):
                 commit = commits[commit_hash]
                 if "author" in commit:
                     authors.add(commit["author"])
@@ -155,62 +248,94 @@ rule rebuild_git_repositories_info:
                 if "snakemake_related" in commit and commit["snakemake_related"]:
                     new_repo_info["n_commits_snakemake_related"] += 1
 
-                    cycle_current = {
-                        "hash": commit_hash,
-                        "epoch": commit["committer_epoch"],
-                    }
+                cycle_current = {
+                    "hash": commit_hash,
+                    "epoch": commit["committer_epoch"],
+                }
 
-                    if cycle_begin == {}:
-                        cycle_begin = cycle_current
-                        cycle_n_commits = 0
+                if cycle_begin == {}:
+                    cycle_begin = cycle_current
+                    if cycle_end == {}:
+                        cycle_n_commits = 1
                     else:
-                        cycle_end = cycle_current
+                        cycle_n_commits = 0
+                else:
+                    cycle_end = cycle_current
+                    if "snakemake_related" in commit and commit["snakemake_related"]:
                         cycle_n_commits_snakemake_related += 1
-                        added_or_removed = (
-                            commit["snakemake_n_rules_added"] -
-                            commit["snakemake_n_rules_removed"] or
-                            commit["snakemake_n_modules_added"] -
-                            commit["snakemake_n_modules_removed"]
-                        )
-                        if added_or_removed:
-                            new_repo_info["n_evalution_cycles"] += 1
-                            if commit["snakemake_n_rules_added"] > 0:
-                                cycle_n_snakemake_rules_added = commit["snakemake_n_rules_added"]
-                            if commit["snakemake_n_rules_removed"] > 0:
-                                cycle_n_snakemake_rules_removed = commit["snakemake_n_rules_removed"]
-                            if commit["snakemake_n_modules_added"] > 0:
-                                cycle_n_snakemake_modules_added = commit["snakemake_n_modules_added"]
-                            if commit["snakemake_n_modules_removed"] > 0:
-                                cycle_n_snakemake_modules_removed = commit["snakemake_n_modules_removed"]
-                            if "file_extensions" in commit:
-                                file_extensions += commit["file_extensions"]
-                            diff_days = None
-                            diff_mins = None
-                            diff_hours = None
-                            begin_epoch = cycle_begin["epoch"]
-                            end_epoch   = cycle_end["epoch"]
-                            if begin_epoch and end_epoch:
-                                diff_days = util.convert_seconds(end_epoch - begin_epoch, unit="d")
-                                diff_mins = util.convert_seconds(end_epoch - begin_epoch, unit="m")
-                                diff_hours = util.convert_seconds(end_epoch - begin_epoch, unit="h")
 
-                            new_repo_info["evalution_cycles"].append({
-                                "begin": cycle_begin,
-                                "end": cycle_end,
-                                "diff_days": diff_days,
-                                "diff_mins": diff_mins,
-                                "diff_hours": diff_hours,
-                                "n_commits": cycle_n_commits,
-                                "n_commits_snakemake_related": cycle_n_commits_snakemake_related,
-                                "n_snakemake_rules_added": cycle_n_snakemake_rules_added,
-                                "n_snakemake_rules_removed": cycle_n_snakemake_rules_removed,
-                                "n_snakemake_modules_added": cycle_n_snakemake_modules_added,
-                                "n_snakemake_modules_removed": cycle_n_snakemake_modules_removed,
-                                "file_extensions": list(set(file_extensions)),
-                            })
-                            cycle_begin = cycle_end
-                            cycle_n_commits_snakemake_related = 0
-                            cycle_n_commits = 0
+                    added_or_removed = (
+                        commit["snakemake_n_rules_added"] -
+                        commit["snakemake_n_rules_removed"] or
+                        commit["snakemake_n_modules_added"] -
+                        commit["snakemake_n_modules_removed"]
+                    )
+
+                    if added_or_removed or is_last_commit_of_the_day:
+                        diff_days = None
+                        diff_mins = None
+                        diff_hours = None
+                        begin_epoch = cycle_begin["epoch"]
+                        end_epoch   = cycle_end["epoch"]
+                        if begin_epoch and end_epoch:
+                            diff_days = util.convert_seconds(end_epoch - begin_epoch, unit="d")
+                            diff_mins = util.convert_seconds(end_epoch - begin_epoch, unit="m")
+                            diff_hours = util.convert_seconds(end_epoch - begin_epoch, unit="h")
+                        else:
+                            raise ValueError("Invalid epoch values for cycle begin and end.")
+
+                        # Check if the next commit is within 24 hours
+                        if i_commit + 1 < n_commits:
+                            next_commit_hash = commit_hashes_sorted_by_epoch[i_commit + 1]
+                            next_commit_epoch = commits[next_commit_hash]["committer_epoch"]
+                            next_diff_days = util.convert_seconds(next_commit_epoch - end_epoch, unit="d")
+                            if next_diff_days == 0:
+                                cycle_n_snakemake_rules_added_on_the_day += commit["snakemake_n_rules_added"]
+                                cycle_n_snakemake_rules_removed_on_the_day += commit["snakemake_n_rules_removed"]
+                                cycle_n_snakemake_modules_added_on_the_day += commit["snakemake_n_modules_added"]
+                                cycle_n_snakemake_modules_removed_on_the_day += commit["snakemake_n_modules_removed"]
+                                if "file_extensions" in commit:
+                                    file_extensions += commit["file_extensions"]
+
+                                is_last_commit_of_the_day = True
+                                continue
+
+                        new_repo_info["n_evolution_cycles"] += 1
+                        cycle_n_snakemake_rules_added = commit["snakemake_n_rules_added"] + cycle_n_snakemake_rules_added_on_the_day
+                        cycle_n_snakemake_rules_removed = commit["snakemake_n_rules_removed"] + cycle_n_snakemake_rules_removed_on_the_day
+                        cycle_n_snakemake_modules_added = commit["snakemake_n_modules_added"] + cycle_n_snakemake_modules_added_on_the_day
+                        cycle_n_snakemake_modules_removed = commit["snakemake_n_modules_removed"] + cycle_n_snakemake_modules_removed_on_the_day
+                        if "file_extensions" in commit:
+                            file_extensions += commit["file_extensions"]
+
+                        new_repo_info["evolution_cycles"].append({
+                            "begin": cycle_begin,
+                            "end": cycle_end,
+                            "diff_days": diff_days,
+                            "diff_mins": diff_mins,
+                            "diff_hours": diff_hours,
+                            "n_commits": cycle_n_commits,
+                            "n_commits_snakemake_related": cycle_n_commits_snakemake_related,
+                            "n_snakemake_rules_added": cycle_n_snakemake_rules_added,
+                            "n_snakemake_rules_removed": cycle_n_snakemake_rules_removed,
+                            "n_snakemake_modules_added": cycle_n_snakemake_modules_added,
+                            "n_snakemake_modules_removed": cycle_n_snakemake_modules_removed,
+                            "file_extensions": list(set(file_extensions)),
+                        })
+
+                        cycle_begin = cycle_end
+                        cycle_n_commits_snakemake_related = 0
+                        cycle_n_commits = 0
+                        cycle_n_snakemake_rules_added = 0
+                        cycle_n_snakemake_rules_removed = 0
+                        cycle_n_snakemake_modules_added = 0
+                        cycle_n_snakemake_modules_removed = 0
+                        cycle_n_snakemake_rules_added_on_the_day = 0
+                        cycle_n_snakemake_rules_removed_on_the_day = 0
+                        cycle_n_snakemake_modules_added_on_the_day = 0
+                        cycle_n_snakemake_modules_removed_on_the_day = 0
+                        is_last_commit_of_the_day = False
+                        file_extensions = []
 
                 if "committer_epoch" in commit:
                     committer_epoch  = commit["committer_epoch"]
@@ -219,6 +344,30 @@ rule rebuild_git_repositories_info:
 
                     if new_repo_info["last_commit_at_epoch"] < committer_epoch:
                         new_repo_info["last_commit_at_epoch"] = committer_epoch
+
+            # Store leftover cycle
+            if cycle_begin != {} and cycle_end != {} and cycle_begin != cycle_end:
+                new_repo_info["n_evolution_cycles"] += 1
+                begin_epoch = cycle_begin["epoch"]
+                end_epoch   = cycle_end["epoch"]
+                diff_days = util.convert_seconds(end_epoch - begin_epoch, unit="d")
+                diff_mins = util.convert_seconds(end_epoch - begin_epoch, unit="m")
+                diff_hours = util.convert_seconds(end_epoch - begin_epoch, unit="h")
+
+                new_repo_info["evolution_cycles"].append({
+                    "begin": cycle_begin,
+                    "end": cycle_end,
+                    "diff_days": diff_days,
+                    "diff_mins": diff_mins,
+                    "diff_hours": diff_hours,
+                    "n_commits": cycle_n_commits,
+                    "n_commits_snakemake_related": cycle_n_commits_snakemake_related,
+                    "n_snakemake_rules_added": cycle_n_snakemake_rules_added,
+                    "n_snakemake_rules_removed": cycle_n_snakemake_rules_removed,
+                    "n_snakemake_modules_added": cycle_n_snakemake_modules_added,
+                    "n_snakemake_modules_removed": cycle_n_snakemake_modules_removed,
+                    "file_extensions": list(set(file_extensions)),
+                })
 
             new_repo_info["first_commit_at"] = util.epoch_to_str(
                 epoch=new_repo_info["first_commit_at_epoch"],
@@ -242,7 +391,8 @@ rule rebuild_git_repositories_info:
             # pullrequests  = storage_handler.read(f"{METADATADIR}/{owner}_{repo_name}_pullrequests.json", from_json=True)
 
             storage_handler.write(f"{METADATADIR}/{owner}_{repo_name}_info.json", new_repo_info, to_json=True)
-            printlog.info("Saved metadata for %s", repo_fullname)
+            printlog.info("(%d/%d) Saved metadata for %s",
+                            i_repo+1, len(cloned_repositories), repo_fullname)
 
         storage_handler.write(output[0], "")
 
@@ -277,7 +427,7 @@ rule extract_git_repositories_metadata:
 
             repo_path = os.path.join(WORKDIR, "cloned_repositories", repo_fullname.replace("/", "_"))
 
-            gitrepo_handler = analysis_git.GitAnalysis(logger=logger, repo_path=repo_path)
+            gitrepo_handler = analysis_git.GitAnalysis(logger=printlog, repo_path=repo_path)
             count_commits = gitrepo_handler.extract_commits(extend_for="snakemake")
             printlog.info("Extracted %d commits from %s", count_commits, repo_fullname)
 
