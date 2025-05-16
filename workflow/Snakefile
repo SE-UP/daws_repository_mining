@@ -438,6 +438,55 @@ rule extract_git_repositories_metadata:
         storage_handler.write(output[0], "")
 
 
+rule get_releases:
+    input:
+        WORKDIR + "/.done_get_issues_extras",
+        WORKDIR + "/repositories_to_clone.txt"
+
+    output:
+        WORKDIR + "/repositories_with_releases.txt",
+        WORKDIR + "/failed_repositories_with_releases.txt",
+        WORKDIR + "/.done_get_releases",
+
+    run:
+        releases_repositories = []
+        failed_releases_repositories = []
+        cloned_repositories = storage_handler.read(input[1], multiple_lines=True)
+
+        for i_repo, repo_fullname in enumerate(cloned_repositories):
+            owner, repo = repo_fullname.strip().split("/")
+            file_releases = f"{METADATADIR}/{owner}_{repo}_releases.json"
+
+            printlog.info("(%d/%d) Getting releases from %s.",
+                            i_repo+1, len(cloned_repositories), repo_fullname)
+
+            if os.path.exists(file_releases):
+                printlog.info("(%d/%d) Releases are already saved for %s.",
+                                i_repo+1, len(cloned_repositories), repo_fullname)
+                releases_repositories.append(repo_fullname)
+                continue
+            else:
+                try:
+                    releases = gitapi_handler.get_releases(owner, repo)
+                except Exception as e:
+                    printlog.error("(%d/%d) Failed to get releases for %s: %s",
+                                    i_repo+1, len(cloned_repositories), repo_fullname, e)
+                    failed_releases_repositories.append(repo_fullname)
+                    continue
+
+                if len(releases) > 0:
+                    storage_handler.write(file_releases, releases, to_json=True)
+                    printlog.info("(%d/%d) Saved releases for %s, total: %d",
+                                    i_repo+1, len(cloned_repositories),
+                                    repo_fullname, len(releases))
+
+                releases_repositories.append(repo_fullname)
+
+        storage_handler.write(output[0], releases_repositories)
+        storage_handler.write(output[1], failed_releases_repositories)
+        storage_handler.write(output[2], "")
+
+
 rule get_issues_extras:
     input:
         WORKDIR + "/.done_get_issues",

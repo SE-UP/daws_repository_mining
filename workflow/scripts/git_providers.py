@@ -30,6 +30,13 @@ class GitProviderBase(ABC):
 
 
     @abstractmethod
+    def get_releases(self, owner=None, repo=None) -> list:
+        """
+        Abstract method to get the releases of a repository.
+        """
+
+
+    @abstractmethod
     def get_issues(self, owner=None, repo=None) -> dict:
         """
         Abstract method to get issues of a repository.
@@ -99,6 +106,13 @@ class GitProvider(GitProviderBase):
         Search repositories.
         """
         return self._provider_instance.search_repositories(query)
+
+
+    def get_releases(self, owner=None, repo=None):
+        """
+        Get the releases of a repository.
+        """
+        return self._provider_instance.get_releases(owner, repo)
 
 
     def get_issues(self, owner=None, repo=None):
@@ -187,6 +201,42 @@ class GithubProvider(GitProviderBase):
             self.log.info("Rate limit exceeded. Waiting for %d seconds.",
                           reset_in_secs)
             time.sleep(reset_in_secs)
+
+
+    def get_releases(self, owner=None, repo=None):
+        request_url = f"{self.base_url_api}/repos/{owner}/{repo}/releases?per_page=100"
+
+        all_releases = []
+        current_page = 1
+        while True:
+            request_url_with_page = request_url + f"&page={current_page}"
+            response = requests.get(
+                request_url_with_page,
+                headers=self.http_headers,
+                timeout=10)
+
+            if response.status_code != 200:
+                error_message = f"Failed to get releases: {request_url_with_page}: {response.text}"
+                raise requests.exceptions.HTTPError(error_message)
+
+            if not response:
+                raise ValueError("No releases found for %s/%s.",
+                                 owner, repo)
+
+            self.log.debug("Got %d releases of %s/%s.", len(response.json()),
+                           owner, repo)
+
+            self._check_rate_limit(response.headers)
+
+            count_releases = len(response.json())
+            all_releases.extend(response.json())
+
+            if count_releases < 100:
+                break
+
+            current_page += 1
+
+        return all_releases
 
 
     def get_issue_comments(self, owner=None, repo=None, issue_number=None):
