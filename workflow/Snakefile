@@ -402,6 +402,7 @@ rule extract_git_repositories_metadata:
         WORKDIR + "/.done_clone_repositories",
         WORKDIR + "/cloned_repositories.txt",
         WORKDIR + "/repositories_to_clone.txt",
+        WORKDIR + "/.done_get_commit_comments",
 
     output:
         WORKDIR + "/.done_extract_git_repository_metadata",
@@ -436,6 +437,55 @@ rule extract_git_repositories_metadata:
 
         storage_handler.write(output[1], extracted_repositories)
         storage_handler.write(output[0], "")
+
+
+rule get_commit_comments:
+    input:
+        WORKDIR + "/.done_get_releases",
+        WORKDIR + "/repositories_to_clone.txt"
+
+    output:
+        WORKDIR + "/repositories_with_commit_comments.txt",
+        WORKDIR + "/failed_repositories_with_commit_comments.txt",
+        WORKDIR + "/.done_get_commit_comments",
+
+    run:
+        comments_repositories = []
+        failed_comments_repositories = []
+        cloned_repositories = storage_handler.read(input[1], multiple_lines=True)
+
+        for i_repo, repo_fullname in enumerate(cloned_repositories):
+            owner, repo = repo_fullname.strip().split("/")
+            file_comments = f"{METADATADIR}/{owner}_{repo}_commit_comments.json"
+
+            printlog.info("(%d/%d) Getting comments from %s.",
+                            i_repo+1, len(cloned_repositories), repo_fullname)
+
+            if os.path.exists(file_comments):
+                printlog.info("(%d/%d) comments are already saved for %s.",
+                                i_repo+1, len(cloned_repositories), repo_fullname)
+                comments_repositories.append(repo_fullname)
+                continue
+            else:
+                try:
+                    comments = gitapi_handler.get_commit_comments(owner, repo)
+                except Exception as e:
+                    printlog.error("(%d/%d) Failed to get comments for %s: %s",
+                                    i_repo+1, len(cloned_repositories), repo_fullname, e)
+                    failed_comments_repositories.append(repo_fullname)
+                    continue
+
+                if len(comments) > 0:
+                    storage_handler.write(file_comments, comments, to_json=True)
+                    printlog.info("(%d/%d) Saved comments for %s, total: %d",
+                                    i_repo+1, len(cloned_repositories),
+                                    repo_fullname, len(comments))
+
+                comments_repositories.append(repo_fullname)
+
+        storage_handler.write(output[0], comments_repositories)
+        storage_handler.write(output[1], failed_comments_repositories)
+        storage_handler.write(output[2], "")
 
 
 rule get_releases:
