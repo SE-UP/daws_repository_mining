@@ -37,6 +37,13 @@ class GitProviderBase(ABC):
 
 
     @abstractmethod
+    def get_pages(self, owner=None, repo=None) -> list:
+        """
+        Abstract method to get the pages of a repository.
+        """
+
+
+    @abstractmethod
     def get_releases(self, owner=None, repo=None) -> list:
         """
         Abstract method to get the releases of a repository.
@@ -134,6 +141,13 @@ class GitProvider(GitProviderBase):
         Get the commit comments of a repository.
         """
         return self._provider_instance.get_commit_comments(owner, repo)
+
+
+    def get_pages(self, owner=None, repo=None):
+        """
+        Get the pages of a repository.
+        """
+        return self._provider_instance.get_pages(owner, repo)
 
 
     def get_releases(self, owner=None, repo=None):
@@ -365,6 +379,42 @@ class GithubProvider(GitProviderBase):
                 raise ValueError("Failed to parse CI/CD artifacts response")
 
         return all_artifacts
+
+
+    def get_pages(self, owner=None, repo=None):
+        request_url = f"{self.base_url_api}/repos/{owner}/{repo}/pages/builds?per_page=100"
+
+        all_pagebuilds = []
+        current_page = 1
+        while True:
+            request_url_with_page = request_url + f"&page={current_page}"
+            response = requests.get(
+                request_url_with_page,
+                headers=self.http_headers,
+                timeout=10)
+
+            if response.status_code != 200:
+                error_message = f"Failed to get pagebuilds: {request_url_with_page}: {response.text}"
+                raise requests.exceptions.HTTPError(error_message)
+
+            if not response:
+                raise ValueError("No pagebuilds found for %s/%s.",
+                                 owner, repo)
+
+            self.log.debug("Got %d pagebuilds of %s/%s.", len(response.json()),
+                           owner, repo)
+
+            self._check_rate_limit(response.headers)
+
+            count_pagebuilds = len(response.json())
+            all_pagebuilds.extend(response.json())
+
+            if count_pagebuilds < 100:
+                break
+
+            current_page += 1
+
+        return all_pagebuilds
 
 
     def get_releases(self, owner=None, repo=None):
