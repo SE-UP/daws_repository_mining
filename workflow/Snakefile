@@ -402,7 +402,7 @@ rule extract_git_repositories_metadata:
         WORKDIR + "/.done_clone_repositories",
         WORKDIR + "/cloned_repositories.txt",
         WORKDIR + "/repositories_to_clone.txt",
-        WORKDIR + "/.done_get_commit_comments",
+        WORKDIR + "/.done_get_cicd",
 
     output:
         WORKDIR + "/.done_extract_git_repository_metadata",
@@ -437,6 +437,88 @@ rule extract_git_repositories_metadata:
 
         storage_handler.write(output[1], extracted_repositories)
         storage_handler.write(output[0], "")
+
+
+rule get_cicd:
+    input:
+        WORKDIR + "/.done_get_commit_comments",
+        WORKDIR + "/repositories_to_clone.txt"
+
+    output:
+        WORKDIR + "/repositories_with_cicd_workflows.txt",
+        WORKDIR + "/repositories_with_cicd_artifacts.txt",
+        WORKDIR + "/failed_repositories_with_cicd_workflows.txt",
+        WORKDIR + "/failed_repositories_with_cicd_artifacts.txt",
+        WORKDIR + "/.done_get_cicd",
+
+    run:
+        cicd_workflows_repositories = []
+        cicd_artifacts_repositories = []
+        failed_cicd_workflows_repositories = []
+        failed_cicd_artifacts_repositories = []
+        cloned_repositories = storage_handler.read(input[1], multiple_lines=True)
+
+        for i_repo, repo_fullname in enumerate(cloned_repositories):
+            owner, repo = repo_fullname.strip().split("/")
+            file_cicd_workflows = f"{METADATADIR}/{owner}_{repo}_cicd_workflows.json"
+            file_cicd_artifacts = f"{METADATADIR}/{owner}_{repo}_cicd_artifacts.json"
+            _is_done_workflows = False
+            _is_done_artifacts = False
+
+            printlog.info("(%d/%d) Getting CI/CD from %s.",
+                            i_repo+1, len(cloned_repositories), repo_fullname)
+
+            # Get CI/CD workflows
+            if os.path.exists(file_cicd_workflows):
+                printlog.info("(%d/%d) CI/CD workflows are already saved for %s.",
+                                i_repo+1, len(cloned_repositories), repo_fullname)
+                _is_done_workflows = True
+                cicd_workflows_repositories.append(repo_fullname)
+
+            else:
+                try:
+                    workflows = gitapi_handler.get_cicd_workflows(owner, repo)
+                    if len(workflows) > 0:
+                        storage_handler.write(file_cicd_workflows, workflows, to_json=True)
+                        printlog.info("(%d/%d) Saved CI/CD workflows for %s, total: %d",
+                                        i_repo+1, len(cloned_repositories),
+                                        repo_fullname, len(workflows))
+
+                    _is_done_workflows = True
+                    cicd_workflows_repositories.append(repo_fullname)
+                except Exception as e:
+                    printlog.error("(%d/%d) Failed to get CI/CD workflows for %s: %s",
+                                    i_repo+1, len(cloned_repositories), repo_fullname, e)
+                    failed_cicd_workflows_repositories.append(repo_fullname)
+
+            # Get CI/CD analysis_git_repository
+            if os.path.exists(file_cicd_artifacts):
+                printlog.info("(%d/%d) CI/CD artifacts are already saved for %s.",
+                                i_repo+1, len(cloned_repositories), repo_fullname)
+                _is_done_artifacts = True
+                cicd_artifacts_repositories.append(repo_fullname)
+
+            else:
+                try:
+                    artifacts = gitapi_handler.get_cicd_artifacts(owner, repo)
+                    if len(artifacts) > 0:
+                        storage_handler.write(file_cicd_artifacts, artifacts, to_json=True)
+                        printlog.info("(%d/%d) Saved CI/CD artifacts for %s, total: %d",
+                                        i_repo+1, len(cloned_repositories),
+                                        repo_fullname, len(artifacts))
+
+                    _is_done_artifacts = True
+                    cicd_artifacts_repositories.append(repo_fullname)
+                except Exception as e:
+                    printlog.error("(%d/%d) Failed to get CI/CD artifacts for %s: %s",
+                                    i_repo+1, len(cloned_repositories), repo_fullname, e)
+                    failed_cicd_artifacts_repositories.append(repo_fullname)
+
+        storage_handler.write(output[0], cicd_workflows_repositories)
+        storage_handler.write(output[1], cicd_artifacts_repositories)
+        storage_handler.write(output[2], failed_cicd_workflows_repositories)
+        storage_handler.write(output[3], failed_cicd_artifacts_repositories)
+        storage_handler.write(output[4], "")
 
 
 rule get_commit_comments:

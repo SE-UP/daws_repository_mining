@@ -44,6 +44,20 @@ class GitProviderBase(ABC):
 
 
     @abstractmethod
+    def get_cicd_workflows(self, owner=None, repo=None) -> list:
+        """
+        Abstract method to get the CI/CD workflows of a repository.
+        """
+
+
+    @abstractmethod
+    def get_cicd_artifacts(self, owner=None, repo=None) -> list:
+        """
+        Abstract method to get the CI/CD artifacts of a repository.
+        """
+
+
+    @abstractmethod
     def get_issues(self, owner=None, repo=None) -> dict:
         """
         Abstract method to get issues of a repository.
@@ -127,6 +141,20 @@ class GitProvider(GitProviderBase):
         Get the releases of a repository.
         """
         return self._provider_instance.get_releases(owner, repo)
+
+
+    def get_cicd_artifacts(self, owner=None, repo=None):
+        """
+        Get the CI/CD artifacts of a repository.
+        """
+        return self._provider_instance.get_cicd_artifacts(owner, repo)
+
+
+    def get_cicd_workflows(self, owner=None, repo=None):
+        """
+        Get the CI/CD workflows of a repository.
+        """
+        return self._provider_instance.get_cicd_workflows(owner, repo)
 
 
     def get_issues(self, owner=None, repo=None):
@@ -251,6 +279,92 @@ class GithubProvider(GitProviderBase):
             current_page += 1
 
         return all_comments
+
+
+    def get_cicd_workflows(self, owner=None, repo=None):
+        request_url = f"{self.base_url_api}/repos/{owner}/{repo}/actions/workflows?per_page=100"
+
+        all_workflows = []
+        current_page = 1
+        while True:
+            request_url_with_page = request_url + f"&page={current_page}"
+            response = requests.get(
+                request_url_with_page,
+                headers=self.http_headers,
+                timeout=10)
+
+            if response.status_code != 200:
+                error_message = f"Failed to get CI/CD workflows: {request_url_with_page}: {response.text}"
+                raise requests.exceptions.HTTPError(error_message)
+
+            if not response:
+                raise ValueError("No CI/CD workflows found for %s/%s.",
+                                 owner, repo)
+
+            self._check_rate_limit(response.headers)
+
+            try:
+                workflows = response.json()
+                total_workflows = workflows["total_count"]
+                count_workflows = len(workflows["workflows"])
+                if count_workflows > 0:
+                    all_workflows.extend(workflows["workflows"])
+
+                self.log.debug("Got %d workflows on page %d of %s/%s.", count_workflows,
+                                 current_page, owner, repo)
+
+                if len(workflows) == total_workflows or count_workflows < 100:
+                    break
+
+                current_page += 1
+            except Exception as e:
+                self.log.error("Failed to parse CI/CD workflows: %s", e)
+                raise ValueError("Failed to parse CI/CD workflows response")
+
+        return all_workflows
+
+
+    def get_cicd_artifacts(self, owner=None, repo=None):
+        request_url = f"{self.base_url_api}/repos/{owner}/{repo}/actions/artifacts?per_page=100"
+
+        all_artifacts = []
+        current_page = 1
+        while True:
+            request_url_with_page = request_url + f"&page={current_page}"
+            response = requests.get(
+                request_url_with_page,
+                headers=self.http_headers,
+                timeout=10)
+
+            if response.status_code != 200:
+                error_message = f"Failed to get CI/CD artifacts: {request_url_with_page}: {response.text}"
+                raise requests.exceptions.HTTPError(error_message)
+
+            if not response:
+                raise ValueError("No CI/CD artifacts found for %s/%s.",
+                                 owner, repo)
+
+            self._check_rate_limit(response.headers)
+
+            try:
+                artifacts = response.json()
+                total_artifacts = artifacts["total_count"]
+                count_artifacts = len(artifacts["artifacts"])
+                if count_artifacts > 0:
+                    all_artifacts.extend(artifacts["artifacts"])
+
+                self.log.debug("Got %d artifacts on page %d of %s/%s.", count_artifacts,
+                                 current_page, owner, repo)
+
+                if len(artifacts) == total_artifacts or count_artifacts < 100:
+                    break
+
+                current_page += 1
+            except Exception as e:
+                self.log.error("Failed to parse CI/CD artifacts: %s", e)
+                raise ValueError("Failed to parse CI/CD artifacts response")
+
+        return all_artifacts
 
 
     def get_releases(self, owner=None, repo=None):
