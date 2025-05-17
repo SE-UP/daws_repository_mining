@@ -58,6 +58,13 @@ class GitProviderBase(ABC):
 
 
     @abstractmethod
+    def get_cicd_workflow_runs(self, owner=None, repo=None) -> list:
+        """
+        Abstract method to get the CI/CD workflow runs of a repository.
+        """
+
+
+    @abstractmethod
     def get_cicd_artifacts(self, owner=None, repo=None) -> list:
         """
         Abstract method to get the CI/CD artifacts of a repository.
@@ -169,6 +176,13 @@ class GitProvider(GitProviderBase):
         Get the CI/CD workflows of a repository.
         """
         return self._provider_instance.get_cicd_workflows(owner, repo)
+
+
+    def get_cicd_workflow_runs(self, owner=None, repo=None):
+        """
+        Get the CI/CD workflow runs of a repository.
+        """
+        return self._provider_instance.get_cicd_workflow_runs(owner, repo)
 
 
     def get_issues(self, owner=None, repo=None):
@@ -336,6 +350,49 @@ class GithubProvider(GitProviderBase):
                 raise ValueError("Failed to parse CI/CD workflows response")
 
         return all_workflows
+
+
+    def get_cicd_workflow_runs(self, owner=None, repo=None):
+        request_url = f"{self.base_url_api}/repos/{owner}/{repo}/actions/runs?per_page=100"
+
+        all_runs = []
+        current_page = 1
+        while True:
+            request_url_with_page = request_url + f"&page={current_page}"
+            response = requests.get(
+                request_url_with_page,
+                headers=self.http_headers,
+                timeout=10)
+
+            if response.status_code != 200:
+                error_message = f"Failed to get CI/CD workflow runs: {request_url_with_page}: {response.text}"
+                raise requests.exceptions.HTTPError(error_message)
+
+            if not response:
+                raise ValueError("No CI/CD workflow runs found for %s/%s.",
+                                 owner, repo)
+
+            self._check_rate_limit(response.headers)
+
+            try:
+                runs = response.json()
+                total_runs = runs["total_count"]
+                count_runs = len(runs["workflow_runs"])
+                if count_runs > 0:
+                    all_runs.extend(runs["workflow_runs"])
+
+                self.log.debug("Got %d workflow runs on page %d of %s/%s.", count_runs,
+                                 current_page, owner, repo)
+
+                if len(runs) == total_runs or count_runs < 100:
+                    break
+
+                current_page += 1
+            except Exception as e:
+                self.log.error("Failed to parse CI/CD workflow runs: %s", e)
+                raise ValueError("Failed to parse CI/CD workflow runs response")
+
+        return all_runs
 
 
     def get_cicd_artifacts(self, owner=None, repo=None):
