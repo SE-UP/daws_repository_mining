@@ -40,7 +40,7 @@ def convert_seconds(seconds=None, unit="d"):
     :param unit: The time unit to convert to. "d" (days), "h" (hours), "m" (minutes).
     :return: The converted time.
     """
-    if not seconds or seconds < 0:
+    if seconds is None or seconds < 0:
         return None
 
     if unit == "d":
