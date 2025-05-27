@@ -9,6 +9,7 @@ configfile: "config.yaml"
 
 printlog = util.setup_logger()
 
+COLLECTION_TYPE           = config["collection_type"]
 GIT_SEARCH_START_DATE_STR = config["search_start_date"]
 GIT_SEARCH_START_DATE     = util.str_to_datetime(GIT_SEARCH_START_DATE_STR).date()
 GIT_SEARCH_END_DATE_STR   = config["search_end_date"]
@@ -19,14 +20,23 @@ GIT_PROVIDER              = config["git_provider"]
 GIT_PROVIDER_TOKEN        = config["git_provider_token"]
 DB_ENGINE                 = config["database"]["engine"]
 DB_CONFIG                 = config["database_config"][DB_ENGINE]
-BLACKLIST                 = config["snakemake-catalog-urls"]["blacklist"]
-SKIPS                     = config["snakemake-catalog-urls"]["skips"]
+SNAKEMAKE_BLACKLIST       = config["snakemake-catalog-urls"]["blacklist"]
+SNAKEMAKE_SKIPS           = config["snakemake-catalog-urls"]["skips"]
+NEXTFLOW_PIPELINES        = config["nextflow-urls"]["nf-core-pipelines"]
 
 WORKDIR     = config["result_dir"] + f"/{GIT_PROVIDER}_{GIT_SEARCH_START_DATE_STR}_{GIT_SEARCH_END_DATE_STR}"
 CLONEDIR    = config["result_dir"] + f"/{GIT_PROVIDER}_{GIT_SEARCH_START_DATE_STR}_{GIT_SEARCH_END_DATE_STR}/cloned_repositories"
 METADATADIR = config["result_dir"] + f"/{GIT_PROVIDER}_{GIT_SEARCH_START_DATE_STR}_{GIT_SEARCH_END_DATE_STR}/metadata"
-NOW     = util.now()
+if COLLECTION_TYPE == "nextflow":
+    WORKDIR     = config["result_dir"] + f"/{GIT_PROVIDER}_nextflow"
+    CLONEDIR    = config["result_dir"] + f"/{GIT_PROVIDER}_nextflow/cloned_repositories"
+    METADATADIR = config["result_dir"] + f"/{GIT_PROVIDER}_nextflow/metadata"
+    GIT_SEARCH_START_DATE_STR = "1970-01-01"
+    GIT_SEARCH_START_DATE     = util.str_to_datetime(GIT_SEARCH_START_DATE_STR).date()
+    GIT_SEARCH_END_DATE_STR   = "1970-01-01"
+    GIT_SEARCH_END_DATE       = util.str_to_datetime(GIT_SEARCH_END_DATE_STR).date()
 
+NOW     = util.now()
 storage_handler = storage.Storage(logger=printlog, engine="file", storage_config={"is_absolute": True, "mkdir_ok": True})
 
 gitapi_handler = git_providers.GitProvider(
@@ -46,10 +56,6 @@ rule migrate_jsonfiles_to_database:
         WORKDIR + "/.done_clone_repositories",
         WORKDIR + "/cloned_repositories.txt",
         WORKDIR + "/repositories_to_clone.txt",
-        WORKDIR + "/.done_get_issues",
-        WORKDIR + "/.done_get_issues_extras",
-        WORKDIR + "/.done_extract_git_repository_metadata",
-        WORKDIR + "/.done_rebuild_git_repositories_info",
         WORKDIR + "/.done_generate_event_logs_for_evolution_cycles",
 
     params:
@@ -88,7 +94,6 @@ rule migrate_jsonfiles_to_database:
 
 rule generate_event_logs_for_evolution_cycles:
     input:
-        WORKDIR + "/.done_extract_git_repository_metadata",
         WORKDIR + "/.done_rebuild_git_repositories_info",
         WORKDIR + "/repositories_to_clone.txt",
 
@@ -96,6 +101,10 @@ rule generate_event_logs_for_evolution_cycles:
         WORKDIR + "/.done_generate_event_logs_for_evolution_cycles",
 
     run:
+        if COLLECTION_TYPE != "snakemake":
+            storage_handler.write(output[0], "")
+            return
+
         cloned_repositories = storage_handler.read(input[2], multiple_lines=True)
 
         repo_path = os.path.join(WORKDIR, "cloned_repositories")
@@ -170,6 +179,13 @@ rule rebuild_git_repositories_info:
     input:
         WORKDIR + "/.done_extract_git_repository_metadata",
         WORKDIR + "/repositories_to_clone.txt",
+        WORKDIR + "/.done_get_issues",
+        WORKDIR + "/.done_get_issues_extras",
+        WORKDIR + "/.done_get_commit_comments",
+        WORKDIR + "/.done_get_releases",
+        WORKDIR + "/.done_get_cicd",
+        WORKDIR + "/.done_get_pages",
+        WORKDIR + "/.done_extract_git_repository_metadata",
 
     params:
         search_query_files = expand(WORKDIR + "/search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES),
@@ -182,8 +198,15 @@ rule rebuild_git_repositories_info:
 
         repositories_info_from_git_provider = []
         for search_query_file in params.search_query_files:
-            queries = storage_handler.read(search_query_file, from_json=True)
-            repositories_info_from_git_provider += queries["items"]
+            repo_info = storage_handler.read(search_query_file, from_json=True)
+            if "items" in repo_info:
+                items = repo_info["items"]
+            elif "remote_workflows" in repo_info:
+                items = repo_info["remote_workflows"]
+            else:
+                raise Exception("Check repo_info key from the search result")
+
+            repositories_info_from_git_provider += items
 
         repositories_info_from_git_provider = util.convert_list_to_dict(
             src_list=repositories_info_from_git_provider,
@@ -243,6 +266,17 @@ rule rebuild_git_repositories_info:
 
                 if "committer" in commit:
                     committers.add(commit["committer"])
+
+                if "committer_epoch" in commit:
+                    committer_epoch  = commit["committer_epoch"]
+                    if new_repo_info["first_commit_at_epoch"] > committer_epoch:
+                        new_repo_info["first_commit_at_epoch"] = committer_epoch
+
+                    if new_repo_info["last_commit_at_epoch"] < committer_epoch:
+                        new_repo_info["last_commit_at_epoch"] = committer_epoch
+
+                if COLLECTION_TYPE != "snakemake":
+                    continue
 
                 cycle_n_commits += 1
                 if "snakemake_related" in commit and commit["snakemake_related"]:
@@ -337,37 +371,30 @@ rule rebuild_git_repositories_info:
                         is_last_commit_of_the_day = False
                         file_extensions = []
 
-                if "committer_epoch" in commit:
-                    committer_epoch  = commit["committer_epoch"]
-                    if new_repo_info["first_commit_at_epoch"] > committer_epoch:
-                        new_repo_info["first_commit_at_epoch"] = committer_epoch
+            if COLLECTION_TYPE == "snakemake":
+                # Store leftover cycle
+                if cycle_begin != {} and cycle_end != {} and cycle_begin != cycle_end:
+                    new_repo_info["n_evolution_cycles"] += 1
+                    begin_epoch = cycle_begin["epoch"]
+                    end_epoch   = cycle_end["epoch"]
+                    diff_days = util.convert_seconds(end_epoch - begin_epoch, unit="d")
+                    diff_mins = util.convert_seconds(end_epoch - begin_epoch, unit="m")
+                    diff_hours = util.convert_seconds(end_epoch - begin_epoch, unit="h")
 
-                    if new_repo_info["last_commit_at_epoch"] < committer_epoch:
-                        new_repo_info["last_commit_at_epoch"] = committer_epoch
-
-            # Store leftover cycle
-            if cycle_begin != {} and cycle_end != {} and cycle_begin != cycle_end:
-                new_repo_info["n_evolution_cycles"] += 1
-                begin_epoch = cycle_begin["epoch"]
-                end_epoch   = cycle_end["epoch"]
-                diff_days = util.convert_seconds(end_epoch - begin_epoch, unit="d")
-                diff_mins = util.convert_seconds(end_epoch - begin_epoch, unit="m")
-                diff_hours = util.convert_seconds(end_epoch - begin_epoch, unit="h")
-
-                new_repo_info["evolution_cycles"].append({
-                    "begin": cycle_begin,
-                    "end": cycle_end,
-                    "diff_days": diff_days,
-                    "diff_mins": diff_mins,
-                    "diff_hours": diff_hours,
-                    "n_commits": cycle_n_commits,
-                    "n_commits_snakemake_related": cycle_n_commits_snakemake_related,
-                    "n_snakemake_rules_added": cycle_n_snakemake_rules_added,
-                    "n_snakemake_rules_removed": cycle_n_snakemake_rules_removed,
-                    "n_snakemake_modules_added": cycle_n_snakemake_modules_added,
-                    "n_snakemake_modules_removed": cycle_n_snakemake_modules_removed,
-                    "file_extensions": list(set(file_extensions)),
-                })
+                    new_repo_info["evolution_cycles"].append({
+                        "begin": cycle_begin,
+                        "end": cycle_end,
+                        "diff_days": diff_days,
+                        "diff_mins": diff_mins,
+                        "diff_hours": diff_hours,
+                        "n_commits": cycle_n_commits,
+                        "n_commits_snakemake_related": cycle_n_commits_snakemake_related,
+                        "n_snakemake_rules_added": cycle_n_snakemake_rules_added,
+                        "n_snakemake_rules_removed": cycle_n_snakemake_rules_removed,
+                        "n_snakemake_modules_added": cycle_n_snakemake_modules_added,
+                        "n_snakemake_modules_removed": cycle_n_snakemake_modules_removed,
+                        "file_extensions": list(set(file_extensions)),
+                    })
 
             new_repo_info["first_commit_at"] = util.epoch_to_str(
                 epoch=new_repo_info["first_commit_at_epoch"],
@@ -403,6 +430,7 @@ rule extract_git_repositories_metadata:
         WORKDIR + "/cloned_repositories.txt",
         WORKDIR + "/repositories_to_clone.txt",
         WORKDIR + "/.done_get_cicd",
+        WORKDIR + "/.done_get_pages",
 
     output:
         WORKDIR + "/.done_extract_git_repository_metadata",
@@ -429,7 +457,7 @@ rule extract_git_repositories_metadata:
             repo_path = os.path.join(WORKDIR, "cloned_repositories", repo_fullname.replace("/", "_"))
 
             gitrepo_handler = analysis_git.GitAnalysis(logger=printlog, repo_path=repo_path)
-            count_commits = gitrepo_handler.extract_commits(extend_for="snakemake")
+            count_commits = gitrepo_handler.extract_commits(extend_for=COLLECTION_TYPE)
             printlog.info("Extracted %d commits from %s", count_commits, repo_fullname)
 
             storage_handler.write(file_commit_metadata, gitrepo_handler.commits, to_json=True)
@@ -459,8 +487,15 @@ rule get_pages:
 
         repositories_info_from_git_provider = []
         for search_query_file in params.search_query_files:
-            queries = storage_handler.read(search_query_file, from_json=True)
-            repositories_info_from_git_provider += queries["items"]
+            repo_info = storage_handler.read(search_query_file, from_json=True)
+            if "items" in repo_info:
+                items = repo_info["items"]
+            elif "remote_workflows" in repo_info:
+                items = repo_info["remote_workflows"]
+            else:
+                raise Exception("Check repo_info key from the search result")
+
+            repositories_info_from_git_provider += items
 
         repositories_info_from_git_provider = util.convert_list_to_dict(
             src_list=repositories_info_from_git_provider,
@@ -935,13 +970,19 @@ rule download_skiplist_from_catalog:
         WORKDIR + "/skiplist_all.txt",
         WORKDIR + "/.done_download_skiplist_from_catalog"
     run:
-        util.download_http_file(SKIPS, output[0])
-        util.download_http_file(BLACKLIST, output[1])
+        if COLLECTION_TYPE == "nextflow":
+            storage_handler.write(output[0], "")
+            storage_handler.write(output[1], "")
+            storage_handler.write(output[2], "")
+        else:
+            util.download_http_file(SNAKEMAKE_SKIPS, output[0])
+            util.download_http_file(SNAKEMAKE_BLACKLIST, output[1])
 
-        merged_skiplist = util.merge_skiplist(file_blacklist=output[1],
-                          file_skiplist=output[0])
+            merged_skiplist = util.merge_skiplist(file_blacklist=output[1],
+                              file_skiplist=output[0])
 
-        storage_handler.write(output[2], merged_skiplist)
+            storage_handler.write(output[2], merged_skiplist)
+
         storage_handler.write(output[3], "")
 
 
@@ -960,31 +1001,43 @@ rule search_repositories:
     run:
         json_data = None
 
-        query_strings = storage_handler.read(input[0], multiple_lines=True)
-        for query_string in query_strings:
-            date_range  = query_string.split("created:")[1].split("..")
-            start_date  = date_range[0]
-            end_date    = date_range[1]
-            output_file = f"{WORKDIR}/search_query_result_{start_date}_{end_date}.json"
+        if COLLECTION_TYPE == "nextflow":
+            nextflow_json_file = f"{WORKDIR}/search_query_result_1970-01-01_1970-01-01.json"
+            util.download_http_file(NEXTFLOW_PIPELINES, nextflow_json_file)
+            json_data = storage_handler.read(nextflow_json_file, from_json=True)
+        else:
+            query_strings = storage_handler.read(input[0], multiple_lines=True)
+            for query_string in query_strings:
+                date_range  = query_string.split("created:")[1].split("..")
+                start_date  = date_range[0]
+                end_date    = date_range[1]
+                output_file = f"{WORKDIR}/search_query_result_{start_date}_{end_date}.json"
 
-            # If the output file exists, this is a case that the rule was
-            # stopped in the middle of the execution. Existing output file
-            # means that the search for the query was already done.
-            # Accordingly, we skip this query.
-            if os.path.exists(output_file):
-                continue
+                # If the output file exists, this is a case that the rule was
+                # stopped in the middle of the execution. Existing output file
+                # means that the search for the query was already done.
+                # Accordingly, we skip this query.
+                if os.path.exists(output_file):
+                    continue
 
-            result = gitapi_handler.search_repositories(query=query_string)
-            storage_handler.write(output_file, result, to_json=True)
+                result = gitapi_handler.search_repositories(query=query_string)
+                storage_handler.write(output_file, result, to_json=True)
 
-        items = []
+        searched_repositories = []
         # create repository_list_from_search.txt
         for json_file in params.json_files:
             json_data = storage_handler.read(json_file, from_json=True)
-            for item in json_data["items"]:
-                items.append(item["full_name"])
+            if "items" in json_data:
+                items = json_data["items"]
+            elif "remote_workflows" in json_data:
+                items = json_data["remote_workflows"]
+            else:
+                raise Exception("Check json_data from the search result")
 
-        storage_handler.write(output[1], items)
+            for item in items:
+                searched_repositories.append(item["full_name"])
+
+        storage_handler.write(output[1], searched_repositories)
         storage_handler.write(output[0], "")
 
 
@@ -996,6 +1049,10 @@ rule generate_search_queries:
     params:
         dates=search_date_ranges
     run:
+        if COLLECTION_TYPE == "nextflow":
+            storage_handler.write(output[0], "")
+            return
+
         query_strings = []
         for date_range in params.dates:
             # snakemake workflow in:readme archived:false created:2024-11-01..2024-12-31
@@ -1005,10 +1062,10 @@ rule generate_search_queries:
         storage_handler.write(output[0], query_strings)
 
 rule make_work_directory:
-    """ Create a work directory as ./results/{GIT_PROVIDER}_{GIT_SEARCH_START_DATE}_{GIT_SEARCH_END_DATE} """
+    """Create the WORKDIR."""
     output:
         WORKDIR + "/.initialized"
     run:
-        os.makedirs(f"results/{GIT_PROVIDER}_{GIT_SEARCH_START_DATE}_{GIT_SEARCH_END_DATE}", exist_ok=True)
+        os.makedirs(WORKDIR, exist_ok=True)
         # create .initialized file in the directory.
         storage_handler.write(output[0], "")

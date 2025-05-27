@@ -14,6 +14,7 @@ database_config:
 database:
   engine: neo4j
 
+collection_type: "nextflow"
 git_provider: "github"
 git_provider_token: "xxxxxxxxx"
 search_start_date: "2025-01-01"
@@ -25,3 +26,6 @@ result_dir: "results"
 snakemake-catalog-urls:
   blacklist: https://raw.githubusercontent.com/snakemake/snakemake-workflow-catalog/main/blacklist.txt
   skips: https://raw.githubusercontent.com/snakemake/snakemake-workflow-catalog/main/skips.json
+
+nextflow-urls:
+  nf-core-pipelines: https://raw.githubusercontent.com/nf-core/website/refs/heads/main/public/pipelines.json
