@@ -3,1069 +3,601 @@ import scripts.util as util
 import scripts.storage as storage
 import scripts.database as database
 import scripts.git_providers as git_providers
-import scripts.analysis_git_repository as analysis_git
+import scripts.git_analyzer as git_analyzer
 
 configfile: "config.yaml"
 
 printlog = util.setup_logger()
 
-COLLECTION_TYPE           = config["collection_type"]
-GIT_SEARCH_START_DATE_STR = config["search_start_date"]
-GIT_SEARCH_START_DATE     = util.str_to_datetime(GIT_SEARCH_START_DATE_STR).date()
-GIT_SEARCH_END_DATE_STR   = config["search_end_date"]
-GIT_SEARCH_END_DATE       = util.str_to_datetime(GIT_SEARCH_END_DATE_STR).date()
-GIT_SEARCH_INTERVAL       = config["search_interval"]
-GIT_SEARCH_QUERY          = config["search_query"]
-GIT_PROVIDER              = config["git_provider"]
-GIT_PROVIDER_TOKEN        = config["git_provider_token"]
-DB_ENGINE                 = config["database"]["engine"]
-DB_CONFIG                 = config["database_config"][DB_ENGINE]
-SNAKEMAKE_BLACKLIST       = config["snakemake-catalog-urls"]["blacklist"]
-SNAKEMAKE_SKIPS           = config["snakemake-catalog-urls"]["skips"]
-NEXTFLOW_PIPELINES        = config["nextflow-urls"]["nf-core-pipelines"]
 
-WORKDIR     = config["result_dir"] + f"/{GIT_PROVIDER}_{GIT_SEARCH_START_DATE_STR}_{GIT_SEARCH_END_DATE_STR}"
-CLONEDIR    = config["result_dir"] + f"/{GIT_PROVIDER}_{GIT_SEARCH_START_DATE_STR}_{GIT_SEARCH_END_DATE_STR}/cloned_repositories"
-METADATADIR = config["result_dir"] + f"/{GIT_PROVIDER}_{GIT_SEARCH_START_DATE_STR}_{GIT_SEARCH_END_DATE_STR}/metadata"
-if COLLECTION_TYPE == "nextflow":
-    WORKDIR     = config["result_dir"] + f"/{GIT_PROVIDER}_nextflow"
-    CLONEDIR    = config["result_dir"] + f"/{GIT_PROVIDER}_nextflow/cloned_repositories"
-    METADATADIR = config["result_dir"] + f"/{GIT_PROVIDER}_nextflow/metadata"
-    GIT_SEARCH_START_DATE_STR = "1970-01-01"
-    GIT_SEARCH_START_DATE     = util.str_to_datetime(GIT_SEARCH_START_DATE_STR).date()
-    GIT_SEARCH_END_DATE_STR   = "1970-01-01"
-    GIT_SEARCH_END_DATE       = util.str_to_datetime(GIT_SEARCH_END_DATE_STR).date()
+def _get_snakemake_pid(pid=None, i=None):
+    import psutil
+    if pid is None:
+        pid = os.getpid()
 
-NOW     = util.now()
+    if i == None:
+        i = 0
+
+    current_process = psutil.Process(pid)
+    process_name = current_process.name()
+
+    if process_name == "snakemake":
+        return current_process.pid
+    else:
+        parent_process = current_process.parent()
+        if parent_process:
+            if i > 3:
+                printlog.error("Failed to get the snakemake PID.")
+                raise ValueError("Failed to get the snakemake PID.")
+            else:
+                i += 1
+            new_pid = _get_snakemake_pid(parent_process.pid, i)
+            return new_pid
+
+
+WORKSPACE_NAME     = config["workspace_name"]
+ANALYSIS_FOR       = config["analysis_for"]
+TARGET_LIST_TYPE   = config["target_list_type"]
+TARGET_LIST_ARGS   = config["target_list_args"]
+GIT_PROVIDER       = config["git_provider"]
+GIT_PROVIDER_TOKEN = config["git_provider_token"]
+RESULTDIR          = config["result_dir"]
+WORKDIR            = f"{RESULTDIR}/{WORKSPACE_NAME}/"
+CLONEDIR           = WORKDIR + "cloned_repositories/"
+METADATADIR        = WORKDIR + "metadata/"
+NOW                = util.now()
+HTTP_TIMEOUT       = config["http_timeout"]
+INTERVAL_APICALL   = config["interval_apicall"]
+INTERVAL_CLONE     = config["interval_clone"]
+
+
+DONE_CLONE_REPOSITORIES_FILE                = WORKDIR + config["metadata_files"]["done_clone_repositories"]
+DONE_CALL_APIS_FILE                         = WORKDIR + config["metadata_files"]["done_call_apis"]
+DONE_EXTRACT_COMMITS_FILE                   = WORKDIR + config["metadata_files"]["done_extract_commits"]
+DONE_EXTEND_REPOSITORIES_INFO_FILE          = WORKDIR + config["metadata_files"]["done_extend_repositories_info"]
+REPOSITORIES_TO_CLONE_FILE                  = WORKDIR + config["metadata_files"]["repositories_to_clone"]
+CLONED_REPOSITORIES_FILE                    = WORKDIR + config["metadata_files"]["cloned_repositories"]
+EXTRACTED_REPOSITORIES_FILE                 = WORKDIR + config["metadata_files"]["extracted_repositories"]
+EXTENDED_REPOSITORIES_FILE                  = WORKDIR + config["metadata_files"]["extended_repositories"]
+QUERIED_REPOSITORIES_FILE                   = WORKDIR + config["metadata_files"]["queried_repositories"]
+FAILED_REPOSITORIES_TO_CLONE_FILE           = WORKDIR + config["metadata_files"]["failed_repositories_to_clone"]
+FAILED_REPOSITORIES_TO_CALL_APIS_FILE       = WORKDIR + config["metadata_files"]["failed_repositories_to_call_apis"]
+FAILED_REPOSITORIES_TO_EXTRACT_COMMITS_FILE = WORKDIR + config["metadata_files"]["failed_repositories_to_extract_commits"]
+FAILED_REPOSITORIES_TO_EXTEND_INFO_FILE     = WORKDIR + config["metadata_files"]["failed_repositories_to_extend_info"]
+
 storage_handler = storage.Storage(logger=printlog, engine="file", storage_config={"is_absolute": True, "mkdir_ok": True})
 
-gitapi_handler = git_providers.GitProvider(
+git_provider = git_providers.GitProvider(
     provider=GIT_PROVIDER,
     token=GIT_PROVIDER_TOKEN,
-    logger=printlog)
-
-search_date_ranges = util.generate_date_ranges(GIT_SEARCH_START_DATE, GIT_SEARCH_END_DATE, GIT_SEARCH_INTERVAL)
-START_DATES = [date_range[0] for date_range in search_date_ranges]
-END_DATES   = [date_range[1] for date_range in search_date_ranges]
-printlog.debug(f"search start dates: {START_DATES}")
-printlog.debug(f"search end dates: {END_DATES}")
+    checkout=config["checkout_existing_repositories"],
+    logger=printlog,
+    http_timeout=HTTP_TIMEOUT,
+    interval_apicall=INTERVAL_APICALL,
+    interval_clone=INTERVAL_CLONE)
 
 
-rule migrate_jsonfiles_to_database:
+# TODO: Implement the following rules
+# rule migrate_jsonfiles_to_database:
+# rule generate_event_logs_for_evolution_cycles:
+
+
+rule extend_repositories_info:
     input:
-        WORKDIR + "/.done_clone_repositories",
-        WORKDIR + "/cloned_repositories.txt",
-        WORKDIR + "/repositories_to_clone.txt",
-        WORKDIR + "/.done_generate_event_logs_for_evolution_cycles",
-
-    params:
-        json_files = expand(WORKDIR + "/search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES),
-        skiplist_file = WORKDIR + "/skiplist_all.txt"
+        DONE_EXTRACT_COMMITS_FILE,
+        CLONED_REPOSITORIES_FILE,
 
     output:
-        WORKDIR + "/.done_migrate_jsonfiles_to_database",
-        WORKDIR + "/migrated_repositories.txt"
+        DONE_EXTEND_REPOSITORIES_INFO_FILE,
+        EXTENDED_REPOSITORIES_FILE,
+        FAILED_REPOSITORIES_TO_EXTEND_INFO_FILE,
 
     run:
-        cloned_repositories = storage_handler.read(input[1], multiple_lines=True)
-        repositories_to_clone = storage_handler.read(input[2], multiple_lines=True)
+        cloned_repositories   = storage_handler.read(input[1], multiple_lines=True)
+        failed_repositories   = []
+        extended_repositories = []
 
-        for repo in repositories_to_clone:
-            if repo not in cloned_repositories:
-                printlog.warning("Repository not cloned: %s", repo)
-
-        db = database.Database(logger=printlog, engine=DB_ENGINE,
-                                git_provider=GIT_PROVIDER, db_config=DB_CONFIG)
-
-        stored_repositories = []
-        for json_file in params.json_files:
-            api_response = storage_handler.read(json_file, from_json=True)
-            if "items" in api_response and len(api_response["items"]) > 0:
-                stored_repositories = db.store_search_repositories_results(
-                                        api_response, cloned_repositories)
-            else:
-                printlog.debug("No items in %s", json_file)
-
-        db.close()
-
-        storage_handler.write(output[1], stored_repositories)
-        storage_handler.write(output[0], "")
-
-
-rule generate_event_logs_for_evolution_cycles:
-    input:
-        WORKDIR + "/.done_rebuild_git_repositories_info",
-        WORKDIR + "/repositories_to_clone.txt",
-
-    output:
-        WORKDIR + "/.done_generate_event_logs_for_evolution_cycles",
-
-    run:
-        if COLLECTION_TYPE != "snakemake":
-            storage_handler.write(output[0], "")
-            return
-
-        cloned_repositories = storage_handler.read(input[2], multiple_lines=True)
-
-        repo_path = os.path.join(WORKDIR, "cloned_repositories")
-        gitrepo_handler = analysis_git.GitAnalysis(logger=printlog, repo_path=repo_path)
         for i_repo, repo_fullname in enumerate(cloned_repositories):
-            printlog.info("(%d/%d) Processing %s...",
-                            i_repo+1, len(cloned_repositories), repo_fullname)
             owner, repo_name = repo_fullname.strip().split("/")
-            if not os.path.exists(f"{METADATADIR}/{owner}_{repo_name}_info.json"):
-                printlog.error("Repository metadata is not available: %s", repo_fullname)
-                continue
+            cloned_dir = os.path.join(WORKDIR, owner, repo_name)
+            new_metadata_repo_info_file = cloned_dir + config["metadata_files"]["extended_repositories_info_suffix"]
+            old_metadata_repo_info_file = cloned_dir + config["metadata_files"]["api_result_repo_info_suffix"]
 
-            repo_info = storage_handler.read(f"{METADATADIR}/{owner}_{repo_name}_info.json", from_json=True)
+            metadata_cicd_artifacts_file     = cloned_dir + config["metadata_files"]["api_result_cicd_artifacts_suffix"]
+            metadata_cicd_workflow_runs_file = cloned_dir + config["metadata_files"]["api_result_cicd_workflow_runs_suffix"]
+            metadata_cicd_workflows_file     = cloned_dir + config["metadata_files"]["api_result_cicd_workflows_suffix"]
+            metadata_commit_comments_file    = cloned_dir + config["metadata_files"]["api_result_commit_comments_suffix"]
+            metadata_commits_file            = cloned_dir + config["metadata_files"]["extracted_commits_suffix"]
+            metadata_issue_comments_file     = cloned_dir + config["metadata_files"]["api_result_issue_comments_suffix"]
+            metadata_issue_events_file       = cloned_dir + config["metadata_files"]["api_result_issue_events_suffix"]
+            metadata_issues_file             = cloned_dir + config["metadata_files"]["api_result_issues_suffix"]
+            metadata_pages_file              = cloned_dir + config["metadata_files"]["api_result_pages_suffix"]
+            metadata_pullrequests_file       = cloned_dir + config["metadata_files"]["api_result_pullrequests_suffix"]
+            metadata_releases_file           = cloned_dir + config["metadata_files"]["api_result_releases_suffix"]
 
-            try:
-                issues = storage_handler.read(f"{METADATADIR}/{owner}_{repo_name}_issues.json", from_json=True)
-            except Exception as e:
-                issues = []
-
-            try:
-                comments = storage_handler.read(f"{METADATADIR}/{owner}_{repo_name}_issues_comments.json", from_json=True)
-            except Exception as e:
-                comments = []
-
-            try:
-                events = storage_handler.read(f"{METADATADIR}/{owner}_{repo_name}_issues_events.json", from_json=True)
-            except Exception as e:
-                events = []
-
-            try:
-                pullrequests = storage_handler.read(f"{METADATADIR}/{owner}_{repo_name}_issues_pullrequests.json", from_json=True)
-            except Exception as e:
-                pullrequests = []
-
-            try:
-                commits = storage_handler.read(f"{METADATADIR}/{owner}_{repo_name}_commits.json", from_json=True)
-            except Exception as e:
-                commits = []
-
-            if len(repo_info["evolution_cycles"]) == 0:
-                printlog.warning("(%d/%d) No evolution cycles for %s",
+            if not storage_handler.exists(metadata_commits_file):
+                printlog.info("(%d/%d) No extracted commits for %s, skipping.",
                                 i_repo+1, len(cloned_repositories), repo_fullname)
-                continue
-            else:
-                printlog.info("(%d/%d) %d evolution cycles for %s",
-                                i_repo+1, len(cloned_repositories),
-                                len(repo_info["evolution_cycles"]), repo_fullname)
-
-            printlog.info("(%d/%d) Generating event logs for %s...",
-                            i_repo+1, len(cloned_repositories), repo_fullname)
-
-            for i_cycle, cycle_info in enumerate(repo_info["evolution_cycles"]):
-                event_logs = gitrepo_handler.generate_event_logs_for_evolution_cycle(
-                    cycle_info=cycle_info,
-                    issues=issues,
-                    comments=comments,
-                    events=events,
-                    pullrequests=pullrequests,
-                    commits=commits
-                )
-
-                storage_handler.write(f"{METADATADIR}/{owner}_{repo_name}_evolution_cycle.{i_cycle+1}.event_logs.json",
-                                    event_logs, to_json=True)
-                printlog.info("- (%d/%d) Saved %d event logs for %s",
-                                i_cycle+1, len(repo_info["evolution_cycles"]),
-                                len(event_logs), repo_fullname)
-
-        storage_handler.write(output[0], "")
-
-
-rule rebuild_git_repositories_info:
-    input:
-        WORKDIR + "/.done_extract_git_repository_metadata",
-        WORKDIR + "/repositories_to_clone.txt",
-        WORKDIR + "/.done_get_issues",
-        WORKDIR + "/.done_get_issues_extras",
-        WORKDIR + "/.done_get_commit_comments",
-        WORKDIR + "/.done_get_releases",
-        WORKDIR + "/.done_get_cicd",
-        WORKDIR + "/.done_get_pages",
-        WORKDIR + "/.done_extract_git_repository_metadata",
-
-    params:
-        search_query_files = expand(WORKDIR + "/search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES),
-
-    output:
-        WORKDIR + "/.done_rebuild_git_repositories_info",
-
-    run:
-        cloned_repositories = storage_handler.read(input[1], multiple_lines=True)
-
-        repositories_info_from_git_provider = []
-        for search_query_file in params.search_query_files:
-            repo_info = storage_handler.read(search_query_file, from_json=True)
-            if "items" in repo_info:
-                items = repo_info["items"]
-            elif "remote_workflows" in repo_info:
-                items = repo_info["remote_workflows"]
-            else:
-                raise Exception("Check repo_info key from the search result")
-
-            repositories_info_from_git_provider += items
-
-        repositories_info_from_git_provider = util.convert_list_to_dict(
-            src_list=repositories_info_from_git_provider,
-            key="full_name"
-        )
-
-        for i_repo, repo_fullname in enumerate(cloned_repositories):
-            owner, repo_name = repo_fullname.strip().split("/")
-            file_commit_metadata = f"{METADATADIR}/{owner}_{repo_name}_commits.json"
-
-            if not os.path.exists(file_commit_metadata):
-                printlog.info("Metadata for commits is unavailable: %s.", repo_fullname)
+                failed_repositories.append(repo_fullname)
                 continue
 
-            repo_info = {
-                "repo_owner": owner,
-                "repo_name": repo_name,
-                "repo_full_name": repo_fullname,
-            }
+            if not storage_handler.exists(old_metadata_repo_info_file):
+                printlog.info("(%d/%d) No Repositories API result for %s, skipping.",
+                                i_repo+1, len(cloned_repositories), repo_fullname)
+                failed_repositories.append(repo_fullname)
+                continue
 
-            printlog.info("(%d/%d) Processing %s...",
-                            i_repo+1, len(cloned_repositories), repo_fullname)
-
-            new_repo_info = repo_info | repositories_info_from_git_provider[repo_fullname]
-
-            commits = storage_handler.read(file_commit_metadata, from_json=True)
-            n_commits = len(commits)
-
-            new_repo_info["n_commits"] = n_commits
-            new_repo_info["n_commits_snakemake_related"] = 0
-            new_repo_info["n_evolution_cycles"] = 0
-            new_repo_info["evolution_cycles"] = []
-            new_repo_info["first_commit_at_epoch"] = util.now(is_epoch=True)
-            new_repo_info["last_commit_at_epoch"] = 0
-            authors = set()
-            committers = set()
-            cycle_begin = {}
-            cycle_end = {}
-            cycle_n_commits = 0
-            cycle_n_commits_snakemake_related = 0
-            cycle_n_snakemake_rules_added = 0
-            cycle_n_snakemake_rules_removed = 0
-            cycle_n_snakemake_modules_added = 0
-            cycle_n_snakemake_modules_removed = 0
-            cycle_n_snakemake_rules_added_on_the_day = 0
-            cycle_n_snakemake_rules_removed_on_the_day = 0
-            cycle_n_snakemake_modules_added_on_the_day = 0
-            cycle_n_snakemake_modules_removed_on_the_day = 0
-            is_last_commit_of_the_day = False
-
-            file_extensions = []
-            commit_hashes_sorted_by_epoch = sorted(commits, key=lambda k: commits[k]['committer_epoch'])
-            for i_commit, commit_hash in enumerate(commit_hashes_sorted_by_epoch):
-                commit = commits[commit_hash]
-                if "author" in commit:
-                    authors.add(commit["author"])
-
-                if "committer" in commit:
-                    committers.add(commit["committer"])
-
-                if "committer_epoch" in commit:
-                    committer_epoch  = commit["committer_epoch"]
-                    if new_repo_info["first_commit_at_epoch"] > committer_epoch:
-                        new_repo_info["first_commit_at_epoch"] = committer_epoch
-
-                    if new_repo_info["last_commit_at_epoch"] < committer_epoch:
-                        new_repo_info["last_commit_at_epoch"] = committer_epoch
-
-                if COLLECTION_TYPE != "snakemake":
+            if storage_handler.exists(new_metadata_repo_info_file):
+                if config["force_extend_repositories_info"]:
+                    printlog.info("(%d/%d) Already extended but re-run again for %s",
+                                    i_repo+1, len(cloned_repositories), repo_fullname)
+                    storage_handler.delete_file(new_metadata_repo_info_file)
+                else:
+                    printlog.info("(%d/%d) Extending repository info is already done for %s.",
+                                    i_repo+1, len(cloned_repositories), repo_fullname)
+                    extended_repositories.append(repo_fullname)
                     continue
 
-                cycle_n_commits += 1
-                if "snakemake_related" in commit and commit["snakemake_related"]:
-                    new_repo_info["n_commits_snakemake_related"] += 1
+            repo_info_from_api = storage_handler.read(old_metadata_repo_info_file, from_json=True)
+            # Remove all keys ending with "_url"
+            repo_info_from_api = {k: v for k, v in repo_info_from_api.items() if not k.endswith("_url")}
 
-                cycle_current = {
-                    "hash": commit_hash,
-                    "epoch": commit["committer_epoch"],
-                }
-
-                if cycle_begin == {}:
-                    cycle_begin = cycle_current
-                    if cycle_end == {}:
-                        cycle_n_commits = 1
-                    else:
-                        cycle_n_commits = 0
-                else:
-                    cycle_end = cycle_current
-                    if "snakemake_related" in commit and commit["snakemake_related"]:
-                        cycle_n_commits_snakemake_related += 1
-
-                    added_or_removed = (
-                        commit["snakemake_n_rules_added"] -
-                        commit["snakemake_n_rules_removed"] or
-                        commit["snakemake_n_modules_added"] -
-                        commit["snakemake_n_modules_removed"]
-                    )
-
-                    if added_or_removed or is_last_commit_of_the_day:
-                        diff_days = None
-                        diff_mins = None
-                        diff_hours = None
-                        begin_epoch = cycle_begin["epoch"]
-                        end_epoch   = cycle_end["epoch"]
-                        if begin_epoch and end_epoch:
-                            diff_days = util.convert_seconds(end_epoch - begin_epoch, unit="d")
-                            diff_mins = util.convert_seconds(end_epoch - begin_epoch, unit="m")
-                            diff_hours = util.convert_seconds(end_epoch - begin_epoch, unit="h")
-                        else:
-                            raise ValueError("Invalid epoch values for cycle begin and end.")
-
-                        # Check if the next commit is within 24 hours
-                        if i_commit + 1 < n_commits:
-                            next_commit_hash = commit_hashes_sorted_by_epoch[i_commit + 1]
-                            next_commit_epoch = commits[next_commit_hash]["committer_epoch"]
-                            next_diff_days = util.convert_seconds(next_commit_epoch - end_epoch, unit="d")
-                            if next_diff_days == 0:
-                                cycle_n_snakemake_rules_added_on_the_day += commit["snakemake_n_rules_added"]
-                                cycle_n_snakemake_rules_removed_on_the_day += commit["snakemake_n_rules_removed"]
-                                cycle_n_snakemake_modules_added_on_the_day += commit["snakemake_n_modules_added"]
-                                cycle_n_snakemake_modules_removed_on_the_day += commit["snakemake_n_modules_removed"]
-                                if "file_extensions" in commit:
-                                    file_extensions += commit["file_extensions"]
-
-                                is_last_commit_of_the_day = True
-                                continue
-
-                        new_repo_info["n_evolution_cycles"] += 1
-                        cycle_n_snakemake_rules_added = commit["snakemake_n_rules_added"] + cycle_n_snakemake_rules_added_on_the_day
-                        cycle_n_snakemake_rules_removed = commit["snakemake_n_rules_removed"] + cycle_n_snakemake_rules_removed_on_the_day
-                        cycle_n_snakemake_modules_added = commit["snakemake_n_modules_added"] + cycle_n_snakemake_modules_added_on_the_day
-                        cycle_n_snakemake_modules_removed = commit["snakemake_n_modules_removed"] + cycle_n_snakemake_modules_removed_on_the_day
-                        if "file_extensions" in commit:
-                            file_extensions += commit["file_extensions"]
-
-                        new_repo_info["evolution_cycles"].append({
-                            "begin": cycle_begin,
-                            "end": cycle_end,
-                            "diff_days": diff_days,
-                            "diff_mins": diff_mins,
-                            "diff_hours": diff_hours,
-                            "n_commits": cycle_n_commits,
-                            "n_commits_snakemake_related": cycle_n_commits_snakemake_related,
-                            "n_snakemake_rules_added": cycle_n_snakemake_rules_added,
-                            "n_snakemake_rules_removed": cycle_n_snakemake_rules_removed,
-                            "n_snakemake_modules_added": cycle_n_snakemake_modules_added,
-                            "n_snakemake_modules_removed": cycle_n_snakemake_modules_removed,
-                            "file_extensions": list(set(file_extensions)),
-                        })
-
-                        cycle_begin = cycle_end
-                        cycle_n_commits_snakemake_related = 0
-                        cycle_n_commits = 0
-                        cycle_n_snakemake_rules_added = 0
-                        cycle_n_snakemake_rules_removed = 0
-                        cycle_n_snakemake_modules_added = 0
-                        cycle_n_snakemake_modules_removed = 0
-                        cycle_n_snakemake_rules_added_on_the_day = 0
-                        cycle_n_snakemake_rules_removed_on_the_day = 0
-                        cycle_n_snakemake_modules_added_on_the_day = 0
-                        cycle_n_snakemake_modules_removed_on_the_day = 0
-                        is_last_commit_of_the_day = False
-                        file_extensions = []
-
-            if COLLECTION_TYPE == "snakemake":
-                # Store leftover cycle
-                if cycle_begin != {} and cycle_end != {} and cycle_begin != cycle_end:
-                    new_repo_info["n_evolution_cycles"] += 1
-                    begin_epoch = cycle_begin["epoch"]
-                    end_epoch   = cycle_end["epoch"]
-                    diff_days = util.convert_seconds(end_epoch - begin_epoch, unit="d")
-                    diff_mins = util.convert_seconds(end_epoch - begin_epoch, unit="m")
-                    diff_hours = util.convert_seconds(end_epoch - begin_epoch, unit="h")
-
-                    new_repo_info["evolution_cycles"].append({
-                        "begin": cycle_begin,
-                        "end": cycle_end,
-                        "diff_days": diff_days,
-                        "diff_mins": diff_mins,
-                        "diff_hours": diff_hours,
-                        "n_commits": cycle_n_commits,
-                        "n_commits_snakemake_related": cycle_n_commits_snakemake_related,
-                        "n_snakemake_rules_added": cycle_n_snakemake_rules_added,
-                        "n_snakemake_rules_removed": cycle_n_snakemake_rules_removed,
-                        "n_snakemake_modules_added": cycle_n_snakemake_modules_added,
-                        "n_snakemake_modules_removed": cycle_n_snakemake_modules_removed,
-                        "file_extensions": list(set(file_extensions)),
-                    })
-
-            new_repo_info["first_commit_at"] = util.epoch_to_str(
-                epoch=new_repo_info["first_commit_at_epoch"],
-                fmt="%Y-%m-%dT%H:%M:%S %z"
-            )
-
-            new_repo_info["last_commit_at"] = util.epoch_to_str(
-                epoch=new_repo_info["last_commit_at_epoch"],
-                fmt="%Y-%m-%dT%H:%M:%S %z"
-            )
-
-            # is still maintained?
-            # no commit since in days
-
-            new_repo_info["n_authors"] = len(authors)
-            new_repo_info["n_committers"] = len(committers)
-
-            # issues  = storage_handler.read(f"{METADATADIR}/{owner}_{repo_name}_issues.json", from_json=True)
-            # events  = storage_handler.read(f"{METADATADIR}/{owner}_{repo_name}_events.json", from_json=True)
-            # comments  = storage_handler.read(f"{METADATADIR}/{owner}_{repo_name}_comments.json", from_json=True)
-            # pullrequests  = storage_handler.read(f"{METADATADIR}/{owner}_{repo_name}_pullrequests.json", from_json=True)
-
-            storage_handler.write(f"{METADATADIR}/{owner}_{repo_name}_info.json", new_repo_info, to_json=True)
-            printlog.info("(%d/%d) Saved metadata for %s",
+            printlog.info("(%d/%d) Processing %s...",
                             i_repo+1, len(cloned_repositories), repo_fullname)
 
+            new_repo_info = repo_info_from_api
+            new_repo_info["owner"] = owner
+
+            commits            = storage_handler.read(metadata_commits_file, from_json=True)
+            issues             = []
+            issue_events       = []
+            issue_comments     = []
+            pull_requests      = []
+            commit_comments    = []
+            cicd_artifacts     = []
+            cicd_workflows     = []
+            cicd_workflow_runs = []
+            releases           = []
+            pages              = []
+
+            if storage_handler.exists(metadata_issues_file):
+                issues = storage_handler.read(metadata_issues_file, from_json=True)
+
+            if storage_handler.exists(metadata_issue_events_file):
+                issue_events = storage_handler.read(metadata_issue_events_file, from_json=True)
+
+            if storage_handler.exists(metadata_issue_comments_file):
+                issue_comments = storage_handler.read(metadata_issue_comments_file, from_json=True)
+
+            if storage_handler.exists(metadata_pullrequests_file):
+                pull_requests = storage_handler.read(metadata_pullrequests_file, from_json=True)
+
+            if storage_handler.exists(metadata_commit_comments_file):
+                commit_comments = storage_handler.read(metadata_commit_comments_file, from_json=True)
+
+            if storage_handler.exists(metadata_cicd_artifacts_file):
+                cicd_artifacts = storage_handler.read(metadata_cicd_artifacts_file, from_json=True)
+
+            if storage_handler.exists(metadata_cicd_workflows_file):
+                cicd_workflows = storage_handler.read(metadata_cicd_workflows_file, from_json=True)
+
+            if storage_handler.exists(metadata_cicd_workflow_runs_file):
+                cicd_workflow_runs = storage_handler.read(metadata_cicd_workflow_runs_file, from_json=True)
+
+            if storage_handler.exists(metadata_releases_file):
+                releases = storage_handler.read(metadata_releases_file, from_json=True)
+
+            if storage_handler.exists(metadata_pages_file):
+                pages = storage_handler.read(metadata_pages_file, from_json=True)
+
+            new_repo_info["x_total_commits"]            = len(commits)
+            new_repo_info["x_total_issues"]             = len(issues)
+            new_repo_info["x_total_issue_events"]       = len(issue_events)
+            new_repo_info["x_total_issue_comments"]     = len(issue_comments)
+            new_repo_info["x_total_pull_requests"]      = len(pull_requests)
+            new_repo_info["x_total_commit_comments"]    = len(commit_comments)
+            new_repo_info["x_total_cicd_artifacts"]     = len(cicd_artifacts)
+            new_repo_info["x_total_cicd_workflows"]     = len(cicd_workflows)
+            new_repo_info["x_total_cicd_workflow_runs"] = len(cicd_workflow_runs)
+            new_repo_info["x_total_releases"]           = len(releases)
+            new_repo_info["x_total_pages"]              = len(pages)
+
+            gitrepo_handler = git_analyzer.GitAnalysis(logger=printlog, repo_path=cloned_dir)
+
+            new_repo_info = gitrepo_handler.extend_repo_info_general(
+                repo_info=new_repo_info,
+                commits=commits,
+            )
+
+            extra_method_name = f"extend_repo_info_for_{ANALYSIS_FOR}"
+            try:
+                extra_method = getattr(gitrepo_handler, extra_method_name)
+            except AttributeError:
+                raise ValueError(f"No method in GitAnalysis class for {ANALYSIS_FOR} analysis.")
+
+            new_repo_info = extra_method(repo_info=new_repo_info, commits=commits)
+
+            storage_handler.write(new_metadata_repo_info_file, new_repo_info, to_json=True)
+            extended_repositories.append(repo_fullname)
+            printlog.info("(%d/%d) Saved extended repository info for %s",
+                            i_repo+1, len(cloned_repositories), repo_fullname)
+
+        storage_handler.write(output[1], extended_repositories)
+        storage_handler.write(output[2], failed_repositories)
         storage_handler.write(output[0], "")
 
 
-rule extract_git_repositories_metadata:
+rule extract_commits_from_repositories:
     input:
-        WORKDIR + "/.done_clone_repositories",
-        WORKDIR + "/cloned_repositories.txt",
-        WORKDIR + "/repositories_to_clone.txt",
-        WORKDIR + "/.done_get_cicd",
-        WORKDIR + "/.done_get_pages",
+        DONE_CALL_APIS_FILE,
+        CLONED_REPOSITORIES_FILE,
 
     output:
-        WORKDIR + "/.done_extract_git_repository_metadata",
-        WORKDIR + "/extracted_commits_repositories.txt"
+        DONE_EXTRACT_COMMITS_FILE,
+        EXTRACTED_REPOSITORIES_FILE,
+        FAILED_REPOSITORIES_TO_EXTRACT_COMMITS_FILE,
 
     run:
-        cloned_repositories = storage_handler.read(input[1], multiple_lines=True)
-        repositories_to_clone = storage_handler.read(input[2], multiple_lines=True)
+        cloned_repositories    = storage_handler.read(input[1], multiple_lines=True)
         extracted_repositories = []
+        failed_repositories    = []
 
-        for repo_fullname in repositories_to_clone:
+        for i, repo_fullname in enumerate(cloned_repositories):
             owner, repo_name = repo_fullname.strip().split("/")
-            if repo_fullname not in cloned_repositories:
-                printlog.warning("Repository not cloned: %s", repo_fullname)
+            cloned_dir = os.path.join(WORKDIR, owner, repo_name)
+            metadata_commits_file = cloned_dir + config["metadata_files"]["extracted_commits_suffix"]
+
+            if storage_handler.exists(metadata_commits_file):
+                if config["force_extract_commits"]:
+                    printlog.info("(%d/%d) Already done but forcing to extract commits for %s",
+                                  i + 1, len(cloned_repositories), repo_fullname)
+                    storage_handler.delete_file(metadata_commits_file)
+
+                else:
+                    printlog.info("(%d/%d) Extracting commits is already done for %s.",
+                                      i + 1, len(cloned_repositories), repo_fullname)
+                    extracted_repositories.append(repo_fullname)
+                    continue
+
+            if not storage_handler.exists(cloned_dir):
+                printlog.error("(%d/%d) Repository %s is not cloned.",
+                                i + 1, len(cloned_repositories), repo_fullname)
+                failed_repositories.append(repo_fullname)
                 continue
 
-            file_commit_metadata = f"{METADATADIR}/{owner}_{repo_name}_commits.json"
+            try:
+                gitrepo_handler = git_analyzer.GitAnalysis(logger=printlog, repo_path=cloned_dir)
+                count_commits = gitrepo_handler.extract_commits(analysis_for=ANALYSIS_FOR)
+                printlog.info("(%d/%d) Extracted %d commits for %s",
+                                i + 1, len(cloned_repositories), count_commits, repo_fullname)
 
-            if os.path.exists(file_commit_metadata):
-                printlog.info("Metadata for commits is already saved for %s.", repo_fullname)
+                storage_handler.write(metadata_commits_file, gitrepo_handler.commits, to_json=True)
                 extracted_repositories.append(repo_fullname)
+            except Exception as e:
+                printlog.error("(%d/%d) Failed to extract commits for %s: %s",
+                                i + 1, len(cloned_repositories), repo_fullname, e)
+                failed_repositories.append(repo_fullname)
                 continue
-
-            repo_path = os.path.join(WORKDIR, "cloned_repositories", repo_fullname.replace("/", "_"))
-
-            gitrepo_handler = analysis_git.GitAnalysis(logger=printlog, repo_path=repo_path)
-            count_commits = gitrepo_handler.extract_commits(extend_for=COLLECTION_TYPE)
-            printlog.info("Extracted %d commits from %s", count_commits, repo_fullname)
-
-            storage_handler.write(file_commit_metadata, gitrepo_handler.commits, to_json=True)
-            extracted_repositories.append(repo_fullname)
 
         storage_handler.write(output[1], extracted_repositories)
+        storage_handler.write(output[2], failed_repositories)
         storage_handler.write(output[0], "")
 
 
-rule get_pages:
+rule call_git_provider_apis:
     input:
-        WORKDIR + "/.done_get_cicd",
-        WORKDIR + "/repositories_to_clone.txt"
-
-    params:
-        search_query_files = expand(WORKDIR + "/search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES),
+        DONE_CLONE_REPOSITORIES_FILE,
+        CLONED_REPOSITORIES_FILE,
 
     output:
-        WORKDIR + "/repositories_with_pages.txt",
-        WORKDIR + "/failed_repositories_with_pages.txt",
-        WORKDIR + "/.done_get_pages",
+        QUERIED_REPOSITORIES_FILE,
+        FAILED_REPOSITORIES_TO_CALL_APIS_FILE,
+        DONE_CALL_APIS_FILE
 
     run:
         cloned_repositories = storage_handler.read(input[1], multiple_lines=True)
-        pages_repositories = []
-        failed_pages_repositories = []
+        queried_repositories = []
+        failed_repositories_to_call_apis = []
 
-        repositories_info_from_git_provider = []
-        for search_query_file in params.search_query_files:
-            repo_info = storage_handler.read(search_query_file, from_json=True)
-            if "items" in repo_info:
-                items = repo_info["items"]
-            elif "remote_workflows" in repo_info:
-                items = repo_info["remote_workflows"]
-            else:
-                raise Exception("Check repo_info key from the search result")
+        for i, repo_fullname in enumerate(cloned_repositories):
+            owner, repo = repo_fullname.strip().split("/")
+            cloned_dir = os.path.join(WORKDIR, owner, repo)
+            done_file = cloned_dir + config["metadata_files"]["done_call_apis_suffix"]
+            metadata_repo_info_file = cloned_dir + config["metadata_files"]["api_result_repo_info_suffix"]
+            metadata_issues_file = cloned_dir + config["metadata_files"]["api_result_issues_suffix"]
+            metadata_pullrequests_file = cloned_dir + config["metadata_files"]["api_result_pullrequests_suffix"]
+            metadata_issue_events_file = cloned_dir + config["metadata_files"]["api_result_issue_events_suffix"]
+            metadata_issue_comments_file = cloned_dir + config["metadata_files"]["api_result_issue_comments_suffix"]
+            metadata_commit_comments_file = cloned_dir + config["metadata_files"]["api_result_commit_comments_suffix"]
+            metadata_cicd_artifacts_file = cloned_dir + config["metadata_files"]["api_result_cicd_artifacts_suffix"]
+            metadata_cicd_workflows_file = cloned_dir + config["metadata_files"]["api_result_cicd_workflows_suffix"]
+            metadata_cicd_workflow_runs_file = cloned_dir + config["metadata_files"]["api_result_cicd_workflow_runs_suffix"]
+            metadata_releases_file = cloned_dir + config["metadata_files"]["api_result_releases_suffix"]
+            metadata_pages_file = cloned_dir + config["metadata_files"]["api_result_pages_suffix"]
 
-            repositories_info_from_git_provider += items
+            if storage_handler.exists(done_file):
+                if config["force_call_apis"]:
+                    printlog.info("(%d/%d) Already done but forcing to call API for %s",
+                                   i + 1, len(cloned_repositories), repo_fullname)
 
-        repositories_info_from_git_provider = util.convert_list_to_dict(
-            src_list=repositories_info_from_git_provider,
-            key="full_name"
-        )
+                else:
+                    printlog.info("(%d/%d) Calling APIs is already done for %s.",
+                                   i + 1, len(cloned_repositories), repo_fullname)
+                    queried_repositories.append(repo_fullname)
+                    continue
 
-        for i_repo, repo_fullname in enumerate(cloned_repositories):
-            owner, repo_name = repo_fullname.strip().split("/")
-            file_pages = f"{METADATADIR}/{owner}_{repo_name}_pages.json"
-
-            printlog.info("(%d/%d) Processing %s...",
-                            i_repo+1, len(cloned_repositories), repo_fullname)
-
-            if os.path.exists(file_pages):
-                printlog.info("(%d/%d) Pages are already saved for %s.",
-                                i_repo+1, len(cloned_repositories), repo_fullname)
-                pages_repositories.append(repo_fullname)
-                continue
-
-            if not repositories_info_from_git_provider[repo_fullname]['has_pages']:
-                printlog.info("(%d/%d) No pages for %s.",
-                                i_repo+1, len(cloned_repositories), repo_fullname)
+            if not storage_handler.exists(cloned_dir):
+                printlog.error("(%d/%d) Repository %s is not cloned.",
+                                i + 1, len(cloned_repositories), repo_fullname)
+                failed_repositories_to_call_apis.append(repo_fullname)
                 continue
 
             try:
-                pages = gitapi_handler.get_pages(owner, repo_name)
+                # Call Repositories API
+                printlog.info("(%d/%d) Calling repository API for %s",
+                                i + 1, len(cloned_repositories), repo_fullname)
+                repo_info = (git_provider.call_api_repository(owner, repo))[0]
+                storage_handler.write(metadata_repo_info_file, repo_info, to_json=True)
+                printlog.info("(%d/%d) Saved repo_info for %s",
+                                i + 1, len(cloned_repositories), repo_fullname)
+
+                # Call Issues API
+                issues = []
+                pull_requests = []
+                issue_comments = []
+                commit_comments = []
+                issue_events = []
+                cicd_artifacts = []
+                cicd_workflow_runs = []
+
+                if repo_info.get("has_issues", False):
+                    issues = git_provider.call_api_issues(owner, repo)
+                    if len(issues) > 0:
+                        storage_handler.write(metadata_issues_file, issues, to_json=True)
+                        printlog.info("(%d/%d) Saved %d issues for %s",
+                                        i + 1, len(cloned_repositories), len(issues), repo_fullname)
+                    else:
+                        printlog.info("(%d/%d) No issues for %s",
+                                        i + 1, len(cloned_repositories), repo_fullname)
+                else:
+                    printlog.info("(%d/%d) Issues are not enabled for %s",
+                                    i + 1, len(cloned_repositories), repo_fullname)
+
+                if len(issues) > 0:
+                    # Call Pull Requests API
+                    issues_pr = [issue for issue in issues if issue.get("pull_request", None)]
+                    if len(issues_pr) > 0:
+                        for i_pr, issue in enumerate(issues_pr):
+                            issue_number = issue["number"]
+                            pull_requests.append(git_provider.call_api_pull_request(owner, repo, issue_number))
+                            printlog.info("  * (%d/%d) Saved pull request info for issue no. %d.",
+                                            i_pr + 1, len(issues_pr), issue_number)
+
+                        storage_handler.write(metadata_pullrequests_file, pull_requests, to_json=True)
+
+                    # Call Issue Comments API
+                    issues_with_comments = [issue for issue in issues if issue.get("comments", None)]
+                    if len(issues_with_comments) > 0:
+                        for i_comment, issue in enumerate(issues_with_comments):
+                            issue_number = issue["number"]
+                            issue_comments.extend(git_provider.call_api_issue_comments(owner, repo, issue_number))
+                            printlog.info("  * (%d/%d) Saved comments for issue no. %d.",
+                                            i_comment + 1, len(issues_with_comments), issue_number)
+
+                        storage_handler.write(metadata_issue_comments_file, issue_comments, to_json=True)
+
+                    # Call Issue Events API
+                    if len(issues) > 0:
+                        for i_event, issue in enumerate(issues):
+                            issue_number = issue["number"]
+                            issue_events.extend(git_provider.call_api_issue_events(owner, repo, issue_number))
+                            printlog.info("  * (%d/%d) Saved events for issue no. %d.",
+                                            i_event + 1, len(issues), issue_number)
+
+                        storage_handler.write(metadata_issue_events_file, issue_events, to_json=True)
+
+                # Call Commit Comments API
+                commit_comments = git_provider.call_api_commit_comments(owner, repo)
+                if commit_comments:
+                    storage_handler.write(metadata_commit_comments_file, commit_comments, to_json=True)
+                    printlog.info("(%d/%d) Saved %d commit comments for %s",
+                                    i + 1, len(cloned_repositories), len(commit_comments), repo_fullname)
+                else:
+                    printlog.info("(%d/%d) No commit comments for %s",
+                                    i + 1, len(cloned_repositories), repo_fullname)
+
+
+                # Call CI/CD Artifacts API
+                cicd_artifacts = git_provider.call_api_cicd_artifacts(owner, repo)
+                if cicd_artifacts:
+                    storage_handler.write(metadata_cicd_artifacts_file, cicd_artifacts, to_json=True)
+                    printlog.info("(%d/%d) Saved %d CI/CD artifacts for %s",
+                                    i + 1, len(cloned_repositories), len(cicd_artifacts), repo_fullname)
+                else:
+                    printlog.info("(%d/%d) No CI/CD artifacts for %s",
+                                    i + 1, len(cloned_repositories), repo_fullname)
+
+                # Call CI/CD Workflows API
+                cicd_workflows = git_provider.call_api_cicd_workflows(owner, repo)
+                if cicd_workflows:
+                    storage_handler.write(metadata_cicd_workflows_file, cicd_workflows, to_json=True)
+                    printlog.info("(%d/%d) Saved %d CI/CD workflows for %s",
+                                    i + 1, len(cloned_repositories), len(cicd_workflows), repo_fullname)
+                else:
+                    printlog.info("(%d/%d) No CI/CD workflows for %s",
+                                    i + 1, len(cloned_repositories), repo_fullname)
+
+                # Call CI/CD Workflow Runs API
+                cicd_workflow_runs = git_provider.call_api_cicd_workflow_runs(owner, repo)
+                if cicd_workflow_runs:
+                    storage_handler.write(metadata_cicd_workflow_runs_file, cicd_workflow_runs, to_json=True)
+                    printlog.info("(%d/%d) Saved %d CI/CD workflow runs for %s",
+                                    i + 1, len(cloned_repositories), len(cicd_workflow_runs), repo_fullname)
+                else:
+                    printlog.info("(%d/%d) No CI/CD workflow runs for %s",
+                                    i + 1, len(cloned_repositories), repo_fullname)
+
+                # Call Releases API
+                releases = git_provider.call_api_releases(owner, repo)
+                if releases:
+                    metadata_releases_file = cloned_dir + config["metadata_files"]["api_result_releases_suffix"]
+                    storage_handler.write(metadata_releases_file, releases, to_json=True)
+                    printlog.info("(%d/%d) Saved %d releases for %s",
+                                    i + 1, len(cloned_repositories), len(releases), repo_fullname)
+                else:
+                    printlog.info("(%d/%d) No releases for %s",
+                                    i + 1, len(cloned_repositories), repo_fullname)
+
+                # Call Pages API
+                if repo_info.get("has_pages", False):
+                    pages = git_provider.call_api_pages(owner, repo)
+                    if pages:
+                        metadata_pages_file = cloned_dir + config["metadata_files"]["api_result_pages_suffix"]
+                        storage_handler.write(metadata_pages_file, pages, to_json=True)
+                        printlog.info("(%d/%d) Saved %d pages for %s",
+                                        i + 1, len(cloned_repositories), len(pages), repo_fullname)
+                    else:
+                        printlog.info("(%d/%d) No pages for %s",
+                                        i + 1, len(cloned_repositories), repo_fullname)
+                else:
+                    printlog.info("(%d/%d) Pages are not enabled for %s",
+                                    i + 1, len(cloned_repositories), repo_fullname)
+
+                queried_repositories.append(repo_fullname)
+                storage_handler.write(done_file, "")
+
             except Exception as e:
-                printlog.error("(%d/%d) Failed to get pages for %s: %s",
-                                i_repo+1, len(cloned_repositories), repo_fullname, e)
-                failed_pages_repositories.append(repo_fullname)
+                printlog.error("(%d/%d) Failed to call API for %s: %s",
+                                i + 1, len(cloned_repositories), repo_fullname, e)
+                failed_repositories_to_call_apis.append(repo_fullname)
                 continue
 
-            if len(pages) > 0:
-                storage_handler.write(file_pages, pages, to_json=True)
-                printlog.info("(%d/%d) Saved pages for %s, total: %d",
-                                i_repo+1, len(cloned_repositories),
-                                repo_fullname, len(pages))
-
-            pages_repositories.append(repo_fullname)
-
-        storage_handler.write(output[0], pages_repositories)
-        storage_handler.write(output[1], failed_pages_repositories)
+        printlog.info("A total of queried repositories: %d", len(queried_repositories))
+        printlog.info("A total of failed repositories: %d", len(failed_repositories_to_call_apis))
+        storage_handler.write(output[0], queried_repositories)
+        storage_handler.write(output[1], failed_repositories_to_call_apis)
         storage_handler.write(output[2], "")
-
-
-rule get_cicd:
-    input:
-        WORKDIR + "/.done_get_commit_comments",
-        WORKDIR + "/repositories_to_clone.txt"
-
-    output:
-        WORKDIR + "/repositories_with_cicd_workflows.txt",
-        WORKDIR + "/repositories_with_cicd_workflows_runs.txt",
-        WORKDIR + "/repositories_with_cicd_artifacts.txt",
-        WORKDIR + "/failed_repositories_with_cicd_workflows.txt",
-        WORKDIR + "/failed_repositories_with_cicd_workflows_runs.txt",
-        WORKDIR + "/failed_repositories_with_cicd_artifacts.txt",
-        WORKDIR + "/.done_get_cicd",
-
-    run:
-        cicd_artifacts_repositories = []
-        cicd_workflows_repositories = []
-        cicd_workflows_repositories_runs = []
-        failed_cicd_artifacts_repositories = []
-        failed_cicd_workflows_repositories = []
-        failed_cicd_workflows_repositories_runs = []
-        cloned_repositories = storage_handler.read(input[1], multiple_lines=True)
-
-        for i_repo, repo_fullname in enumerate(cloned_repositories):
-            owner, repo = repo_fullname.strip().split("/")
-            file_cicd_artifacts = f"{METADATADIR}/{owner}_{repo}_cicd_artifacts.json"
-            file_cicd_workflows = f"{METADATADIR}/{owner}_{repo}_cicd_workflows.json"
-            file_cicd_workflows_runs = f"{METADATADIR}/{owner}_{repo}_cicd_workflows_runs.json"
-
-            printlog.info("(%d/%d) Getting CI/CD from %s.",
-                            i_repo+1, len(cloned_repositories), repo_fullname)
-
-            # Get CI/CD workflows
-            if os.path.exists(file_cicd_workflows):
-                printlog.info("(%d/%d) CI/CD workflows are already saved for %s.",
-                                i_repo+1, len(cloned_repositories), repo_fullname)
-                cicd_workflows_repositories.append(repo_fullname)
-
-            else:
-                try:
-                    workflows = gitapi_handler.get_cicd_workflows(owner, repo)
-                    if len(workflows) > 0:
-                        storage_handler.write(file_cicd_workflows, workflows, to_json=True)
-                        printlog.info("(%d/%d) Saved CI/CD workflows for %s, total: %d",
-                                        i_repo+1, len(cloned_repositories),
-                                        repo_fullname, len(workflows))
-                        cicd_workflows_repositories.append(repo_fullname)
-                except Exception as e:
-                    printlog.error("(%d/%d) Failed to get CI/CD workflows for %s: %s",
-                                    i_repo+1, len(cloned_repositories), repo_fullname, e)
-                    failed_cicd_workflows_repositories.append(repo_fullname)
-
-            # Get CI/CD artifacts
-            if os.path.exists(file_cicd_artifacts):
-                printlog.info("(%d/%d) CI/CD artifacts are already saved for %s.",
-                                i_repo+1, len(cloned_repositories), repo_fullname)
-                cicd_artifacts_repositories.append(repo_fullname)
-
-            else:
-                try:
-                    artifacts = gitapi_handler.get_cicd_artifacts(owner, repo)
-                    if len(artifacts) > 0:
-                        storage_handler.write(file_cicd_artifacts, artifacts, to_json=True)
-                        printlog.info("(%d/%d) Saved CI/CD artifacts for %s, total: %d",
-                                        i_repo+1, len(cloned_repositories),
-                                        repo_fullname, len(artifacts))
-                        cicd_artifacts_repositories.append(repo_fullname)
-                except Exception as e:
-                    printlog.error("(%d/%d) Failed to get CI/CD artifacts for %s: %s",
-                                    i_repo+1, len(cloned_repositories), repo_fullname, e)
-                    failed_cicd_artifacts_repositories.append(repo_fullname)
-
-            # Get CI/CD workflows runs
-            if os.path.exists(file_cicd_workflows_runs):
-                printlog.info("(%d/%d) CI/CD workflows runs are already saved for %s.",
-                                i_repo+1, len(cloned_repositories), repo_fullname)
-                cicd_workflows_repositories_runs.append(repo_fullname)
-
-            else:
-                try:
-                    workflows_runs = gitapi_handler.get_cicd_workflow_runs(owner, repo)
-                    if len(workflows_runs) > 0:
-                        storage_handler.write(file_cicd_workflows_runs, workflows_runs, to_json=True)
-                        printlog.info("(%d/%d) Saved CI/CD workflows runs for %s, total: %d",
-                                        i_repo+1, len(cloned_repositories),
-                                        repo_fullname, len(workflows_runs))
-                        cicd_workflows_repositories_runs.append(repo_fullname)
-                except Exception as e:
-                    printlog.error("(%d/%d) Failed to get CI/CD workflows runs for %s: %s",
-                                    i_repo+1, len(cloned_repositories), repo_fullname, e)
-                    failed_cicd_workflows_repositories_runs.append(repo_fullname)
-
-        storage_handler.write(output[0], cicd_workflows_repositories)
-        storage_handler.write(output[1], cicd_workflows_repositories_runs)
-        storage_handler.write(output[2], cicd_artifacts_repositories)
-        storage_handler.write(output[3], failed_cicd_workflows_repositories)
-        storage_handler.write(output[4], failed_cicd_workflows_repositories_runs)
-        storage_handler.write(output[5], failed_cicd_artifacts_repositories)
-        storage_handler.write(output[6], "")
-
-
-rule get_commit_comments:
-    input:
-        WORKDIR + "/.done_get_releases",
-        WORKDIR + "/repositories_to_clone.txt"
-
-    output:
-        WORKDIR + "/repositories_with_commit_comments.txt",
-        WORKDIR + "/failed_repositories_with_commit_comments.txt",
-        WORKDIR + "/.done_get_commit_comments",
-
-    run:
-        comments_repositories = []
-        failed_comments_repositories = []
-        cloned_repositories = storage_handler.read(input[1], multiple_lines=True)
-
-        for i_repo, repo_fullname in enumerate(cloned_repositories):
-            owner, repo = repo_fullname.strip().split("/")
-            file_comments = f"{METADATADIR}/{owner}_{repo}_commit_comments.json"
-
-            printlog.info("(%d/%d) Getting comments from %s.",
-                            i_repo+1, len(cloned_repositories), repo_fullname)
-
-            if os.path.exists(file_comments):
-                printlog.info("(%d/%d) comments are already saved for %s.",
-                                i_repo+1, len(cloned_repositories), repo_fullname)
-                comments_repositories.append(repo_fullname)
-                continue
-            else:
-                try:
-                    comments = gitapi_handler.get_commit_comments(owner, repo)
-                except Exception as e:
-                    printlog.error("(%d/%d) Failed to get comments for %s: %s",
-                                    i_repo+1, len(cloned_repositories), repo_fullname, e)
-                    failed_comments_repositories.append(repo_fullname)
-                    continue
-
-                if len(comments) > 0:
-                    storage_handler.write(file_comments, comments, to_json=True)
-                    printlog.info("(%d/%d) Saved comments for %s, total: %d",
-                                    i_repo+1, len(cloned_repositories),
-                                    repo_fullname, len(comments))
-
-                comments_repositories.append(repo_fullname)
-
-        storage_handler.write(output[0], comments_repositories)
-        storage_handler.write(output[1], failed_comments_repositories)
-        storage_handler.write(output[2], "")
-
-
-rule get_releases:
-    input:
-        WORKDIR + "/.done_get_issues_extras",
-        WORKDIR + "/repositories_to_clone.txt"
-
-    output:
-        WORKDIR + "/repositories_with_releases.txt",
-        WORKDIR + "/failed_repositories_with_releases.txt",
-        WORKDIR + "/.done_get_releases",
-
-    run:
-        releases_repositories = []
-        failed_releases_repositories = []
-        cloned_repositories = storage_handler.read(input[1], multiple_lines=True)
-
-        for i_repo, repo_fullname in enumerate(cloned_repositories):
-            owner, repo = repo_fullname.strip().split("/")
-            file_releases = f"{METADATADIR}/{owner}_{repo}_releases.json"
-
-            printlog.info("(%d/%d) Getting releases from %s.",
-                            i_repo+1, len(cloned_repositories), repo_fullname)
-
-            if os.path.exists(file_releases):
-                printlog.info("(%d/%d) Releases are already saved for %s.",
-                                i_repo+1, len(cloned_repositories), repo_fullname)
-                releases_repositories.append(repo_fullname)
-                continue
-            else:
-                try:
-                    releases = gitapi_handler.get_releases(owner, repo)
-                except Exception as e:
-                    printlog.error("(%d/%d) Failed to get releases for %s: %s",
-                                    i_repo+1, len(cloned_repositories), repo_fullname, e)
-                    failed_releases_repositories.append(repo_fullname)
-                    continue
-
-                if len(releases) > 0:
-                    storage_handler.write(file_releases, releases, to_json=True)
-                    printlog.info("(%d/%d) Saved releases for %s, total: %d",
-                                    i_repo+1, len(cloned_repositories),
-                                    repo_fullname, len(releases))
-
-                releases_repositories.append(repo_fullname)
-
-        storage_handler.write(output[0], releases_repositories)
-        storage_handler.write(output[1], failed_releases_repositories)
-        storage_handler.write(output[2], "")
-
-
-rule get_issues_extras:
-    input:
-        WORKDIR + "/.done_get_issues",
-        WORKDIR + "/repositories_with_issues.txt"
-
-    output:
-        WORKDIR + "/.done_get_issues_extras",
-
-    run:
-        repositories_with_issues = storage_handler.read(input[1], multiple_lines=True)
-
-        for i, repo_fullname in enumerate(repositories_with_issues):
-            owner, repo = repo_fullname.strip().split("/")
-            all_issues           = None
-            all_comments         = list()
-            all_events           = list()
-            issues_non_pr        = list()
-            issues_as_pr         = list()
-            issues_with_comments = list()
-            all_pullrequests     = list()
-            all_events           = list()
-            file_issues          = f"{METADATADIR}/{owner}_{repo}_issues.json"
-            file_comments        = f"{METADATADIR}/{owner}_{repo}_issues_comments.json"
-            file_pullrequests    = f"{METADATADIR}/{owner}_{repo}_issues_pullrequests.json"
-            file_events          = f"{METADATADIR}/{owner}_{repo}_issues_events.json"
-
-            all_issues = storage_handler.read(file_issues, from_json=True)
-            if all_issues is None:
-                printlog.error("Failed to read %s.", file_issues)
-                continue
-
-            for issue in all_issues:
-                if "comments" in issue and issue["comments"] > 0:
-                    issues_with_comments.append(issue)
-
-                if "pull_request" in issue:
-                    issues_as_pr.append(issue)
-                else:
-                    issues_non_pr.append(issue)
-
-            printlog.info("Getting extras from %d issues and %d pull requests from %s.",
-                            len(issues_non_pr), len(issues_as_pr), repo_fullname)
-
-            if os.path.exists(file_pullrequests):
-                printlog.info("Pull requests are already saved for %s.", repo_fullname)
-            else:
-                for pullrequest in issues_as_pr:
-                    issue_number = pullrequest["number"]
-                    details = None
-                    try:
-                        details = gitapi_handler.get_pullrequest_details(owner, repo, issue_number)
-                    except Exception as e:
-                        printlog.error("Failed to get pull request details for %s/%s#%d: %s",
-                                        owner, repo, issue_number, e)
-                    if details is not None:
-                        all_pullrequests.append(details)
-
-                if len(all_pullrequests) > 0:
-                    storage_handler.write(file_pullrequests, all_pullrequests, to_json=True)
-                    printlog.info("Saved %d pull request details for %s",
-                                    len(all_pullrequests), repo_fullname)
-
-            if os.path.exists(file_comments):
-                printlog.info("Comments are already saved for %s.", repo_fullname)
-            else:
-                for issue in issues_with_comments:
-                    issue_number = issue["number"]
-                    comments = None
-                    try:
-                        comments = gitapi_handler.get_issue_comments(owner, repo, issue_number)
-                    except Exception as e:
-                        printlog.error("Failed to get comments for %s/%s#%d: %s",
-                                        owner, repo, issue_number, e)
-                    if comments is not None and len(comments) > 0:
-                        all_comments.extend(comments)
-                    else:
-                        printlog.warning("Failed to get comments for %s/%s#%d",
-                                         owner, repo, issue_number)
-
-                if len(all_comments) > 0:
-                    storage_handler.write(file_comments, all_comments, to_json=True)
-                    printlog.info("Saved %d comments of %d issues for %s",
-                                    len(all_comments), len(issues_with_comments), repo_fullname)
-                else:
-                    printlog.debug("No comments found for %s", repo_fullname)
-
-            if os.path.exists(file_events):
-                printlog.info("Events are already saved for %s.", repo_fullname)
-            else:
-                for issue in all_issues:
-                    issue_number = issue["number"]
-                    events = None
-                    try:
-                        events = gitapi_handler.get_issue_events(owner, repo, issue_number)
-                    except Exception as e:
-                        printlog.error("Failed to get events for %s/%s#%d: %s",
-                                        owner, repo, issue_number, e)
-                    if events is not None and len(events) > 0:
-                        all_events.extend(events)
-                    else:
-                        printlog.warning("Failed to get events for %s/%s#%d",
-                                         owner, repo, issue_number)
-
-                if len(all_events) > 0:
-                    storage_handler.write(file_events, all_events, to_json=True)
-                    printlog.info("Saved %d events of %d issues for %s",
-                                    len(all_events), len(all_issues), repo_fullname)
-                else:
-                    printlog.debug("No events found for %s", repo_fullname)
-
-
-        storage_handler.write(output[0], "")
-
-
-rule get_issues:
-    input:
-        WORKDIR + "/.done_clone_repositories",
-        WORKDIR + "/cloned_repositories.txt",
-        WORKDIR + "/repositories_to_clone.txt"
-
-    params:
-        search_result_files = expand(WORKDIR + "/search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES),
-
-    output:
-        WORKDIR + "/.done_get_issues",
-        WORKDIR + "/repositories_with_issues.txt"
-
-    run:
-        cloned_repositories = []
-        issues_repositories = []
-        full_names = storage_handler.read(input[1], multiple_lines=True)
-        for full_name in full_names:
-            owner, repo = full_name.split("/")
-            cloned_repositories.append({"owner": owner, "repo": repo})
-
-        for search_result_file in params.search_result_files:
-            search_api_response = storage_handler.read(search_result_file, from_json=True)
-            if "items" not in search_api_response or len(search_api_response["items"]) < 1:
-                printlog.error("No items in %s.", search_result_file)
-                continue
-
-            for repo_details in search_api_response["items"]:
-                full_name = repo_details["full_name"]
-                owner, repo = full_name.split("/")
-
-                if os.path.exists(f"{METADATADIR}/{owner}_{repo}_issues.json"):
-                    printlog.info("Issues are already saved for %s.", full_name)
-                    issues_repositories.append(full_name)
-                    continue
-
-                if {"owner": owner, "repo": repo} not in cloned_repositories:
-                    continue
-
-                if "has_issues" not in repo_details or not repo_details["has_issues"]:
-                    printlog.debug("Issues is disabled for %s", full_name)
-                    continue
-
-                issues = None
-                try:
-                    issues = gitapi_handler.get_issues(owner, repo)
-                except Exception as e:
-                    printlog.error("Failed to get issues for %s: %s", full_name, e)
-
-                if issues is None or issues["total_count"] < 1:
-                    printlog.debug("No issues in %s.", full_name)
-                    continue
-
-                storage_handler.write(f"{METADATADIR}/{owner}_{repo}_issues.json", issues["items"], to_json=True)
-                printlog.info("Saved issues for %s, total: %d", full_name, issues["total_count"])
-                issues_repositories.append(f"{owner}/{repo}")
-
-        storage_handler.write(output[1], issues_repositories)
-        storage_handler.write(output[0], "")
 
 
 rule clone_repositories:
     input:
-        WORKDIR + "/.done_download_skiplist_from_catalog",
-        WORKDIR + "/skiplist_all.txt"
-
-    params:
-        repolist_file = WORKDIR + "/repository_list_from_search.txt"
+        REPOSITORIES_TO_CLONE_FILE,
 
     output:
-        WORKDIR + "/cloned_repositories.txt",
-        WORKDIR + "/repositories_to_clone.txt",
-        WORKDIR + "/.done_clone_repositories"
+        CLONED_REPOSITORIES_FILE,
+        FAILED_REPOSITORIES_TO_CLONE_FILE,
+        DONE_CLONE_REPOSITORIES_FILE,
 
     run:
-        skiplist_all = storage_handler.read(input[1], multiple_lines=True)
+        repositories_to_clone = storage_handler.read(input[0], multiple_lines=True)
+        failed_repositories_to_clone = []
+        cloned_repositories = []
+        printlog.info("A number of repositories to clone: %d", len(repositories_to_clone))
 
-        skip_count = 0
-        target_count = 0
-        repositories_to_clone = []
-        searched_repositories = storage_handler.read(params.repolist_file, multiple_lines=True)
-        for repo in searched_repositories:
-            if repo in skiplist_all:
-                skip_count += 1
+        for i, repo_fullname in enumerate(repositories_to_clone):
+            owner, repo_name = repo_fullname.strip().split("/")
+            dir_to_clone = os.path.join(WORKDIR, owner, repo_name)
+            done_file = dir_to_clone + config["metadata_files"]["done_clone_repository_suffix"]
+
+            if storage_handler.exists(done_file):
+                if config["checkout_existing_repositories"]:
+                    storage_handler.delete_file(done_file)
+                    printlog.info("(%d/%d) Checking out %s/%s to %s", i + 1, len(repositories_to_clone), owner, repo_name, dir_to_clone)
+                    try:
+                        git_provider.clone_repository(dir_to_clone, owner, repo_name)
+                        storage_handler.write(done_file, "")
+                        cloned_repositories.append(repo_fullname)
+                    except Exception as e:
+                        printlog.error("Failed to clone %s/%s: %s", owner, repo_name, e)
+                        failed_repositories_to_clone.append(repo_fullname)
+                        continue
+                else:
+                    printlog.info("Repository %s/%s is already cloned.", owner, repo_name)
+                    cloned_repositories.append(repo_fullname)
+                    continue
             else:
-                repositories_to_clone.append(repo)
-                target_count += 1
+                printlog.info("(%d/%d) Cloning %s/%s to %s", i + 1, len(repositories_to_clone), owner, repo_name, dir_to_clone)
+                try:
+                    git_provider.clone_repository(dir_to_clone, owner, repo_name)
+                    storage_handler.write(done_file, "")
+                    cloned_repositories.append(repo_fullname)
+                except Exception as e:
+                    printlog.error("Failed to clone %s/%s: %s (No .clone.done file!)", owner, repo_name, e)
+                    printlog.error("Manually delete the directory %s or create the %s file to mark it as cloned.", dir_to_clone, done_file)
+                    failed_repositories_to_clone.append(repo_fullname)
+                    continue
 
-        printlog.info("Number of repositories to clone: %s (skipped: %s)",
-                                                target_count, skip_count)
+        printlog.info("A total of cloned repositories: %d", len(cloned_repositories))
+        printlog.info("A total of failed repositories: %d", len(failed_repositories_to_clone))
 
-        storage_handler.write(output[1], repositories_to_clone)
-
-        cloned_repositories = gitapi_handler.clone_repositories(CLONEDIR,
-                                repositories_to_clone)
-
-        printlog.info("Number of cloned repositories: %s", len(cloned_repositories))
+        if len(cloned_repositories) == 0:
+            printlog.error("No repositories were cloned successfully. Please check the logs.")
+            raise ValueError("No repositories were cloned successfully.")
 
         storage_handler.write(output[0], cloned_repositories)
+        storage_handler.write(output[1], failed_repositories_to_clone)
         storage_handler.write(output[2], "")
 
 
-rule download_skiplist_from_catalog:
-    input:
-        WORKDIR + "/.done_search_repositories",
-
-    params:
-        file_skiplist  = WORKDIR + "/skips.json",
-        file_blacklist = WORKDIR + "/blacklist.txt",
-
+rule initialize_to_clone_repositories:
     output:
-        WORKDIR + "/skips.json",
-        WORKDIR + "/blacklist.txt",
-        WORKDIR + "/skiplist_all.txt",
-        WORKDIR + "/.done_download_skiplist_from_catalog"
-    run:
-        if COLLECTION_TYPE == "nextflow":
-            storage_handler.write(output[0], "")
-            storage_handler.write(output[1], "")
-            storage_handler.write(output[2], "")
-        else:
-            util.download_http_file(SNAKEMAKE_SKIPS, output[0])
-            util.download_http_file(SNAKEMAKE_BLACKLIST, output[1])
-
-            merged_skiplist = util.merge_skiplist(file_blacklist=output[1],
-                              file_skiplist=output[0])
-
-            storage_handler.write(output[2], merged_skiplist)
-
-        storage_handler.write(output[3], "")
-
-
-rule search_repositories:
-    input:
-        WORKDIR + "/search_queries.txt"
-
-    params:
-        json_files = expand(WORKDIR + "/search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES)
-
-    output:
-        WORKDIR + "/.done_search_repositories",
-        WORKDIR + "/repository_list_from_search.txt",
-        expand(WORKDIR + "/search_query_result_{start_date}_{end_date}.json", zip, start_date=START_DATES, end_date=END_DATES)
+        REPOSITORIES_TO_CLONE_FILE,
 
     run:
-        json_data = None
+        repositories_to_clone = []
+        match TARGET_LIST_TYPE:
+            case "file":
+                for TARGET_LIST_ARG in TARGET_LIST_ARGS:
+                    with open(TARGET_LIST_ARG, "r") as f:
+                        for line in f:
+                            repositories_to_clone.append(line.strip())
 
-        if COLLECTION_TYPE == "nextflow":
-            nextflow_json_file = f"{WORKDIR}/search_query_result_1970-01-01_1970-01-01.json"
-            util.download_http_file(NEXTFLOW_PIPELINES, nextflow_json_file)
-            json_data = storage_handler.read(nextflow_json_file, from_json=True)
-        else:
-            query_strings = storage_handler.read(input[0], multiple_lines=True)
-            for query_string in query_strings:
-                date_range  = query_string.split("created:")[1].split("..")
-                start_date  = date_range[0]
-                end_date    = date_range[1]
-                output_file = f"{WORKDIR}/search_query_result_{start_date}_{end_date}.json"
+            case "name":
+                repositories_to_clone = TARGET_LIST_ARGS
 
-                # If the output file exists, this is a case that the rule was
-                # stopped in the middle of the execution. Existing output file
-                # means that the search for the query was already done.
-                # Accordingly, we skip this query.
-                if os.path.exists(output_file):
-                    continue
+            case "search_query":
+                search_result = git_provider.search_repositories(query=query_string)
+                if 'items' in search_result:
+                    for item in search_result["items"]:
+                        repositories_to_clone.append(item["full_name"])
+                else:
+                    printlog.error("No items found in search result: query=%s: result=%s", query_string, search_result)
+                    raise ValueError("No items found in search result.")
 
-                result = gitapi_handler.search_repositories(query=query_string)
-                storage_handler.write(output_file, result, to_json=True)
+            case _:
+                printlog.error("Invalid TARGET_LIST_TYPE: %s: Should be 'file', 'search_query', or 'name'", TARGET_LIST_TYPE)
+                raise ValueError("Invalid TARGET_LIST_TYPE")
 
-        searched_repositories = []
-        # create repository_list_from_search.txt
-        for json_file in params.json_files:
-            json_data = storage_handler.read(json_file, from_json=True)
-            if "items" in json_data:
-                items = json_data["items"]
-            elif "remote_workflows" in json_data:
-                items = json_data["remote_workflows"]
+        printlog.info("A number of repositories to clone: %d", len(repositories_to_clone))
+
+        storage_handler.write(output[0], repositories_to_clone)
+
+
+rule cleanup:
+    run:
+        files_to_delete = [
+            CLONED_REPOSITORIES_FILE,
+            REPOSITORIES_TO_CLONE_FILE,
+            DONE_CLONE_REPOSITORIES_FILE,
+            QUERIED_REPOSITORIES_FILE,
+            DONE_CALL_APIS_FILE,
+            FAILED_REPOSITORIES_TO_CALL_APIS_FILE,
+            FAILED_REPOSITORIES_TO_CLONE_FILE,
+            DONE_EXTRACT_COMMITS_FILE,
+            EXTRACTED_REPOSITORIES_FILE,
+            FAILED_REPOSITORIES_TO_EXTRACT_COMMITS_FILE,
+            DONE_EXTEND_REPOSITORIES_INFO_FILE,
+            EXTENDED_REPOSITORIES_FILE,
+            FAILED_REPOSITORIES_TO_EXTEND_INFO_FILE,
+        ]
+
+        printlog.info("Cleaning up the session files.")
+        for file in files_to_delete:
+            if storage_handler.exists(file):
+                try:
+                    printlog.info("Deleting %s", file)
+                    storage_handler.delete_file(file)
+                except Exception as e:
+                    printlog.error("Failed to delete %s: %s", file, e)
             else:
-                raise Exception("Check json_data from the search result")
-
-            for item in items:
-                searched_repositories.append(item["full_name"])
-
-        storage_handler.write(output[1], searched_repositories)
-        storage_handler.write(output[0], "")
-
-
-rule generate_search_queries:
-    input:
-        WORKDIR + "/.initialized"
-    output:
-        WORKDIR + "/search_queries.txt"
-    params:
-        dates=search_date_ranges
-    run:
-        if COLLECTION_TYPE == "nextflow":
-            storage_handler.write(output[0], "")
-            return
-
-        query_strings = []
-        for date_range in params.dates:
-            # snakemake workflow in:readme archived:false created:2024-11-01..2024-12-31
-            query_string = f"{GIT_SEARCH_QUERY} created:{date_range[0]}..{date_range[1]}"
-            query_strings.append(query_string)
-
-        storage_handler.write(output[0], query_strings)
-
-rule make_work_directory:
-    """Create the WORKDIR."""
-    output:
-        WORKDIR + "/.initialized"
-    run:
-        os.makedirs(WORKDIR, exist_ok=True)
-        # create .initialized file in the directory.
-        storage_handler.write(output[0], "")
+                printlog.info("Not found %s, skipping.", file)

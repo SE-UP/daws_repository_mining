@@ -1,31 +1,61 @@
-database_config:
-  mongo:
-    host: "localhost"
-    port: 27017
-    db: "github"
-    collection: "snakemake"
-  neo4j:
-    host: "localhost"
-    port: 7687
-    username: "neo4j"
-    password: "your_password"
-    db_name: "neo4j"
+# used for naming the database and result directory
+# This name should be unique to keep the results separated
+workspace_name: &workspace_name "test_run"
+
+analysis_for: "general" # general, snakemake, nextflow
+git_provider: "github" # Only support github for now
+git_provider_token: "github_XXXXX"
+
+target_list_type: "name"  # url, file, search_query, repo_name
+target_list_args:
+  - "SE-UP/daws_repository_mining"
+  - SE-UP/RSE-UP
+
+http_timeout: 10       # seconds
+interval_apicall: 0.8  # seconds
+interval_clone: 60     # seconds
+
+checkout_existing_repositories: false
+force_call_apis: false
+force_extract_commits: false
+force_extend_repositories_info: true
+result_dir: "results"
+metadata_files:
+  api_result_cicd_artifacts_suffix:       ".cicd_artifacts.json"
+  api_result_cicd_workflow_runs_suffix:   ".cicd_workflow_runs.json"
+  api_result_cicd_workflows_suffix:       ".cicd_workflows.json"
+  api_result_commit_comments_suffix:      ".commit_comments.json"
+  api_result_issue_comments_suffix:       ".issue_comments.json"
+  api_result_issue_events_suffix:         ".issue_events.json"
+  api_result_issues_suffix:               ".issues.json"
+  api_result_pages_suffix:                ".pages.json"
+  api_result_pullrequests_suffix:         ".pullrequests.json"
+  api_result_releases_suffix:             ".releases.json"
+  api_result_repo_info_suffix:            ".repo_info.json"
+  done_call_apis:                         "call_apis.done"
+  done_call_apis_suffix:                  ".call_apis.done"
+  done_clone_repositories:                "clone_repositories.done"
+  done_clone_repository_suffix:           ".clone.done"
+  done_extend_repositories_info:          "extend_repositories_info.done"
+  done_extract_commits:                   "extract_commits.done"
+  failed_repositories_to_call_apis:       "failed_repositories_to_call_apis.txt"
+  failed_repositories_to_clone:           "failed_repositories_to_clone.txt"
+  failed_repositories_to_extend_info:     "failed_repositories_to_extend_info.txt"
+  failed_repositories_to_extract_commits: "failed_repositories_to_extract_commits.txt"
+  cloned_repositories:                    "cloned_repositories.txt"
+  extended_repositories:                  "extended_repositories.txt"
+  extended_repositories_info_suffix:      ".repo_info_extended.json"
+  extracted_commits_suffix:               ".commits.json"
+  extracted_repositories:                 "extracted_repositories.txt"
+  queried_repositories:                   "queried_repositories.txt"
+  repositories_to_clone:                  "repositories_to_clone.txt"
 
 database:
-  engine: neo4j
-
-collection_type: "nextflow"
-git_provider: "github"
-git_provider_token: "xxxxxxxxx"
-search_start_date: "2025-01-01"
-search_end_date: "2025-02-19"
-search_interval: "m"
-search_query: "snakemake workflow in:readme archived:false"
-result_dir: "results"
-
-snakemake-catalog-urls:
-  blacklist: https://raw.githubusercontent.com/snakemake/snakemake-workflow-catalog/main/blacklist.txt
-  skips: https://raw.githubusercontent.com/snakemake/snakemake-workflow-catalog/main/skips.json
-
-nextflow-urls:
-  nf-core-pipelines: https://raw.githubusercontent.com/nf-core/website/refs/heads/main/public/pipelines.json
+  engine: "neo4j" # Only support neo4j for now
+  config:
+    neo4j:
+      host: "localhost"
+      port: 7687
+      username: "neo4j"
+      password: "password"
+      db_name: *workspace_name

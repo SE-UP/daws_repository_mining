@@ -1,6 +1,6 @@
 requests
 neo4j
-pygit2==1.16 # FreeBSD doesn't support the latest version yet.
+pygit2
 matplotlib
 pandas
 pydriller

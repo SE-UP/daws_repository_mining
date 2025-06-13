@@ -7,19 +7,29 @@ import sys
 import time
 import logging
 import importlib
+import scripts.input_validator as input_validator
 from email.utils import parsedate_to_datetime
 from abc import ABC, abstractmethod
 import requests
+
+validator = input_validator.Validator()
 
 
 class GitProviderBase(ABC):
     """
     Abstract base class for Git providers.
     """
-    def __init__(self, logger=logging.getLogger(), provider=None, token=None):
+    def __init__(self, logger=logging.getLogger(), provider=None, token=None,
+                 checkout=False, interval_apicall=1, interval_clone=60,
+                 http_timeout=10):
         self.log = logger
-        self.api_token = token
-        self.provider = provider
+        self.api_token      = token
+        self.provider       = provider
+        self.checkout       = checkout
+        self.http_timeout   = http_timeout
+        self.per_page       = 100
+        self.interval_apicall = interval_apicall
+        self.interval_clone   = interval_clone
 
 
     @abstractmethod
@@ -30,79 +40,86 @@ class GitProviderBase(ABC):
 
 
     @abstractmethod
-    def get_commit_comments(self, owner=None, repo=None) -> list:
+    def call_api_repository(self, owner, repo) -> list:
         """
-        Abstract method to get the commit comments of a repository.
-        """
-
-
-    @abstractmethod
-    def get_pages(self, owner=None, repo=None) -> list:
-        """
-        Abstract method to get the pages of a repository.
+        Abstract method to get the repository details.
         """
 
 
     @abstractmethod
-    def get_releases(self, owner=None, repo=None) -> list:
+    def call_api_issues(self, owner, repo) -> list:
         """
-        Abstract method to get the releases of a repository.
-        """
-
-
-    @abstractmethod
-    def get_cicd_workflows(self, owner=None, repo=None) -> list:
-        """
-        Abstract method to get the CI/CD workflows of a repository.
+        Abstract method to get the issues of a repository.
         """
 
 
     @abstractmethod
-    def get_cicd_workflow_runs(self, owner=None, repo=None) -> list:
-        """
-        Abstract method to get the CI/CD workflow runs of a repository.
-        """
-
-
-    @abstractmethod
-    def get_cicd_artifacts(self, owner=None, repo=None) -> list:
-        """
-        Abstract method to get the CI/CD artifacts of a repository.
-        """
-
-
-    @abstractmethod
-    def get_issues(self, owner=None, repo=None) -> dict:
-        """
-        Abstract method to get issues of a repository.
-        """
-
-
-    @abstractmethod
-    def get_issue_comments(self, owner=None, repo=None, issue_number=None) -> list:
-        """
-        Abstract method to get the comments of an issue.
-        """
-
-
-    @abstractmethod
-    def get_issue_events(self, owner=None, repo=None, issue_number=None) -> list:
-        """
-        Abstract method to get the events of an issue.
-        """
-
-
-    @abstractmethod
-    def get_pullrequest_details(self, owner=None, repo=None, issue_number=None) -> list:
+    def call_api_pull_request(self, owner, repo, issue_no) -> list:
         """
         Abstract method to get the pull request details of an issue.
         """
 
 
     @abstractmethod
-    def clone_repositories(self, basedir=None, repos=None) -> list:
+    def call_api_issue_comments(self, owner, repo, issue_no) -> list:
         """
-        Abstract method to clone repositories.
+        Abstract method to get the comments of an issue.
+        """
+
+
+    @abstractmethod
+    def call_api_issue_events(self, owner, repo, issue_no) -> list:
+        """
+        Abstract method to get the events of an issue.
+        """
+
+
+    @abstractmethod
+    def call_api_commit_comments(self, owner, repo) -> list:
+        """
+        Abstract method to get the commit comments of a repository.
+        """
+
+
+    @abstractmethod
+    def call_api_cicd_artifacts(self, owner, repo) -> list:
+        """
+        Abstract method to get the CI/CD artifacts of a repository.
+        """
+
+
+    @abstractmethod
+    def call_api_cicd_workflows(self, owner, repo) -> list:
+        """
+        Abstract method to get the CI/CD workflows of a repository.
+        """
+
+
+    @abstractmethod
+    def call_api_cicd_workflow_runs(self, owner, repo) -> list:
+        """
+        Abstract method to get the CI/CD workflow runs of a repository.
+        """
+
+
+    @abstractmethod
+    def call_api_pages(self, owner, repo) -> list:
+        """
+        Abstract method to get the pages of a repository.
+        """
+
+
+    @abstractmethod
+    def call_api_releases(self, owner, repo) -> list:
+        """
+        Abstract method to get the releases of a repository.
+        """
+
+
+    @abstractmethod
+    def clone_repository(self, clone_dir, owner, repo_name, retry_count=5) -> None:
+        """
+        Abstract method to clone a repository.
         """
 
 
@@ -110,8 +127,12 @@ class GitProvider(GitProviderBase):
     """
     GitProvider class to interact with various Git services using the provider.
     """
-    def __init__(self, logger=logging.getLogger(), provider=None, token=None):
-        super().__init__(logger=logger, provider=provider, token=token)
+    def __init__(self, logger=logging.getLogger(), provider=None, token=None,
+                 checkout=False, interval_apicall=1, interval_clone=10,
+                 http_timeout=10):
+        super().__init__(logger=logger, provider=provider, token=token,
+                         checkout=checkout, interval_apicall=interval_apicall,
+                         interval_clone=interval_clone, http_timeout=http_timeout)
         if not self.api_token:
             raise ValueError("API token is required for Git provider")
 
@@ -133,7 +154,9 @@ class GitProvider(GitProviderBase):
             raise ValueError(f"Unsupported Git provider: {self.provider}")
 
         self.log.debug(f"provider class name: {provider_class_name}")
-        return provider_class(self.log, self.provider, self.api_token)
+        return provider_class(self.log, self.provider, self.api_token,
+                              self.checkout, self.interval_apicall,
+                              self.interval_clone, self.http_timeout)
 
 
     def search_repositories(self, query):
@@ -143,93 +166,102 @@ class GitProvider(GitProviderBase):
         return self._provider_instance.search_repositories(query)
 
 
-    def get_commit_comments(self, owner=None, repo=None):
+    def call_api_repository(self, owner, repo):
         """
-        Get the commit comments of a repository.
+        Call API to get the repository details.
         """
-        return self._provider_instance.get_commit_comments(owner, repo)
+        return self._provider_instance.call_api_repository(owner, repo)
 
 
-    def get_pages(self, owner=None, repo=None):
+    def call_api_issues(self, owner, repo):
         """
-        Get the pages of a repository.
+        Call API to get the issues of a repository.
         """
-        return self._provider_instance.get_pages(owner, repo)
+        return self._provider_instance.call_api_issues(owner, repo)
 
 
-    def get_releases(self, owner=None, repo=None):
+    def call_api_pull_request(self, owner, repo, issue_no):
         """
-        Get the releases of a repository.
+        Call API to get the pull request details of an issue.
         """
-        return self._provider_instance.get_releases(owner, repo)
+        return self._provider_instance.call_api_pull_request(owner, repo, issue_no)
 
 
-    def get_cicd_artifacts(self, owner=None, repo=None):
+    def call_api_issue_comments(self, owner, repo, issue_no):
         """
-        Get the CI/CD artifacts of a repository.
+        Call API to get the comments of an issue.
         """
-        return self._provider_instance.get_cicd_artifacts(owner, repo)
+        return self._provider_instance.call_api_issue_comments(owner, repo, issue_no)
 
 
-    def get_cicd_workflows(self, owner=None, repo=None):
+    def call_api_issue_events(self, owner, repo, issue_no):
         """
-        Get the CI/CD workflows of a repository.
+        Call API to get the events of an issue.
         """
-        return self._provider_instance.get_cicd_workflows(owner, repo)
+        return self._provider_instance.call_api_issue_events(owner, repo, issue_no)
 
 
-    def get_cicd_workflow_runs(self, owner=None, repo=None):
+    def call_api_commit_comments(self, owner, repo):
         """
-        Get the CI/CD workflow runs of a repository.
+        Call API to get the commit comments of a repository.
         """
-        return self._provider_instance.get_cicd_workflow_runs(owner, repo)
+        return self._provider_instance.call_api_commit_comments(owner, repo)
 
 
-    def get_issues(self, owner=None, repo=None):
+    def call_api_cicd_artifacts(self, owner, repo):
         """
-        Get issues of a repository.
+        Call API to get the CI/CD artifacts of a repository.
         """
-        return self._provider_instance.get_issues(owner, repo)
+        return self._provider_instance.call_api_cicd_artifacts(owner, repo)
 
 
-    def get_issue_comments(self, owner=None, repo=None, issue_number=None):
+    def call_api_cicd_workflows(self, owner, repo):
         """
-        Get the comments of an issue.
+        Call API to get the CI/CD workflows of a repository.
         """
-        return self._provider_instance.get_issue_comments(owner, repo, issue_number)
+        return self._provider_instance.call_api_cicd_workflows(owner, repo)
 
 
-    def get_issue_events(self, owner=None, repo=None, issue_number=None):
+    def call_api_cicd_workflow_runs(self, owner, repo):
         """
-        Get the comments of an issue.
+        Call API to get the CI/CD workflow runs of a repository.
         """
-        return self._provider_instance.get_issue_events(owner, repo, issue_number)
+        return self._provider_instance.call_api_cicd_workflow_runs(owner, repo)
 
 
-    def get_pullrequest_details(self, owner=None, repo=None, issue_number=None):
+    def call_api_pages(self, owner, repo):
         """
-        Get the pull request details of an issue.
+        Call API to get the pages of a repository.
         """
-        return self._provider_instance.get_pullrequest_details(owner, repo, issue_number)
+        return self._provider_instance.call_api_pages(owner, repo)
 
 
-    def clone_repositories(self, basedir=None, repos=None):
+    def call_api_releases(self, owner, repo):
         """
-        Clone repositories using the current provider.
+        Call API to get the releases of a repository.
         """
-        return self._provider_instance.clone_repositories(basedir, repos)
+        return self._provider_instance.call_api_releases(owner, repo)
+
+
+    def clone_repository(self, clone_dir, owner, repo_name, retry_count=5) -> None:
+        """
+        Clone a repository from the provider.
+        """
+        return self._provider_instance.clone_repository(clone_dir, owner, repo_name, retry_count)
 
 
 class GithubProvider(GitProviderBase):
     """
     Git provider for GitHub.
     """
-    def __init__(self, logger=logging.getLogger(), provider=None, token=None):
-        super().__init__(logger=logger, provider=provider, token=token)
+    def __init__(self, logger=logging.getLogger(), provider=None, token=None,
+                 checkout=False, interval_apicall=1, interval_clone=10,
+                 http_timeout=10):
+        super().__init__(logger=logger, provider=provider, token=token,
+                         checkout=checkout, interval_apicall=interval_apicall,
+                         interval_clone=interval_clone, http_timeout=http_timeout)
         self.base_url_api   = "https://api.github.com"
         self.base_url_clone = "https://github.com"
-        self.wait_sec_api = 0.8
-        self.wait_sec_clone = 60
         self.http_headers = {
             "Accept": "application/json",
             "Authorization": f"token {self.api_token}"
@@ -244,7 +276,7 @@ class GithubProvider(GitProviderBase):
             ratelimit_result = requests.get(
                 f"{self.base_url_api}/rate_limit",
                 headers=self.http_headers,
-                timeout=10)
+                timeout=self.http_timeout)
 
             if ratelimit_result.status_code != 200:
                 error_message = f"Failed to get rate limit: {ratelimit_result.text}"
@@ -265,7 +297,7 @@ class GithubProvider(GitProviderBase):
         self.log.debug("Rate limits: %d/%d, Reset in %d seconds", int(remaining),
                        int(limit), reset_in_secs)
 
-        time.sleep(self.wait_sec_api)
+        time.sleep(self.interval_apicall)
 
         if int(remaining) < 2:
             self.log.info("Rate limit exceeded. Waiting for %d seconds.",
@@ -273,390 +305,133 @@ class GithubProvider(GitProviderBase):
             time.sleep(reset_in_secs)
 
 
-    def get_commit_comments(self, owner=None, repo=None):
-        request_url = f"{self.base_url_api}/repos/{owner}/{repo}/comments?per_page=100"
+    def _call_api(self, api_url, pager=False, page=1, next_link=False):
+        items = []
+        total_count = 0
+        found_next_link = False
 
-        all_comments = []
-        current_page = 1
         while True:
-            request_url_with_page = request_url + f"&page={current_page}"
+            if pager and found_next_link == False:
+                api_url += f"&page={page}&per_page={self.per_page}"
+
+            self.log.debug("Calling API (pager=%s, page=%d, next_link=%s): %s",
+                           pager, page, next_link, api_url)
+
             response = requests.get(
-                request_url_with_page,
+                api_url,
                 headers=self.http_headers,
-                timeout=10)
+                timeout=self.http_timeout)
 
             if response.status_code != 200:
-                error_message = f"Failed to get comments: {request_url_with_page}: {response.text}"
+                error_message = f"Failed to call API: {api_url}: {response.text}"
                 raise requests.exceptions.HTTPError(error_message)
 
             if not response:
-                raise ValueError("No comments found for %s/%s.",
-                                 owner, repo)
-
-            self.log.debug("Got %d comments of %s/%s.", len(response.json()),
-                           owner, repo)
+                raise ValueError("No response from API: %s", api_url)
 
             self._check_rate_limit(response.headers)
 
-            count_comments = len(response.json())
-            all_comments.extend(response.json())
+            item = response.json()
+            if type(item) is not list:
+                item = [item]
 
-            if count_comments < 100:
+            count_items = len(item)
+            items.extend(item)
+
+            current_count   = count_items
+            old_total_count = total_count
+            total_count     = old_total_count + current_count
+
+            self.log.debug("Retrieved %d+%d=%d items on the page %d from API: %s",
+                           current_count, old_total_count, total_count,
+                           page, api_url)
+
+            if count_items < self.per_page or not pager:
                 break
 
-            current_page += 1
-
-        return all_comments
-
-
-    def get_cicd_workflows(self, owner=None, repo=None):
-        request_url = f"{self.base_url_api}/repos/{owner}/{repo}/actions/workflows?per_page=100"
-
-        all_workflows = []
-        current_page = 1
-        while True:
-            request_url_with_page = request_url + f"&page={current_page}"
-            response = requests.get(
-                request_url_with_page,
-                headers=self.http_headers,
-                timeout=10)
-
-            if response.status_code != 200:
-                error_message = f"Failed to get CI/CD workflows: {request_url_with_page}: {response.text}"
-                raise requests.exceptions.HTTPError(error_message)
-
-            if not response:
-                raise ValueError("No CI/CD workflows found for %s/%s.",
-                                 owner, repo)
-
-            self._check_rate_limit(response.headers)
-
-            try:
-                workflows = response.json()
-                total_workflows = workflows["total_count"]
-                count_workflows = len(workflows["workflows"])
-                if count_workflows > 0:
-                    all_workflows.extend(workflows["workflows"])
-
-                self.log.debug("Got %d workflows on page %d of %s/%s.", count_workflows,
-                                 current_page, owner, repo)
-
-                if len(workflows) == total_workflows or count_workflows < 100:
-                    break
-
-                current_page += 1
-            except Exception as e:
-                self.log.error("Failed to parse CI/CD workflows: %s", e)
-                raise ValueError("Failed to parse CI/CD workflows response")
-
-        return all_workflows
-
-
-    def get_cicd_workflow_runs(self, owner=None, repo=None):
-        request_url = f"{self.base_url_api}/repos/{owner}/{repo}/actions/runs?per_page=100"
-
-        all_runs = []
-        current_page = 1
-        while True:
-            request_url_with_page = request_url + f"&page={current_page}"
-            response = requests.get(
-                request_url_with_page,
-                headers=self.http_headers,
-                timeout=10)
-
-            if response.status_code != 200:
-                error_message = f"Failed to get CI/CD workflow runs: {request_url_with_page}: {response.text}"
-                raise requests.exceptions.HTTPError(error_message)
-
-            if not response:
-                raise ValueError("No CI/CD workflow runs found for %s/%s.",
-                                 owner, repo)
-
-            self._check_rate_limit(response.headers)
-
-            try:
-                runs = response.json()
-                total_runs = runs["total_count"]
-                count_runs = len(runs["workflow_runs"])
-                if count_runs > 0:
-                    all_runs.extend(runs["workflow_runs"])
-
-                self.log.debug("Got %d workflow runs on page %d of %s/%s.", count_runs,
-                                 current_page, owner, repo)
-
-                if len(runs) == total_runs or count_runs < 100:
-                    break
-
-                current_page += 1
-            except Exception as e:
-                self.log.error("Failed to parse CI/CD workflow runs: %s", e)
-                raise ValueError("Failed to parse CI/CD workflow runs response")
-
-        return all_runs
-
-
-    def get_cicd_artifacts(self, owner=None, repo=None):
-        request_url = f"{self.base_url_api}/repos/{owner}/{repo}/actions/artifacts?per_page=100"
-
-        all_artifacts = []
-        current_page = 1
-        while True:
-            request_url_with_page = request_url + f"&page={current_page}"
-            response = requests.get(
-                request_url_with_page,
-                headers=self.http_headers,
-                timeout=10)
-
-            if response.status_code != 200:
-                error_message = f"Failed to get CI/CD artifacts: {request_url_with_page}: {response.text}"
-                raise requests.exceptions.HTTPError(error_message)
-
-            if not response:
-                raise ValueError("No CI/CD artifacts found for %s/%s.",
-                                 owner, repo)
-
-            self._check_rate_limit(response.headers)
-
-            try:
-                artifacts = response.json()
-                total_artifacts = artifacts["total_count"]
-                count_artifacts = len(artifacts["artifacts"])
-                if count_artifacts > 0:
-                    all_artifacts.extend(artifacts["artifacts"])
-
-                self.log.debug("Got %d artifacts on page %d of %s/%s.", count_artifacts,
-                                 current_page, owner, repo)
-
-                if len(artifacts) == total_artifacts or count_artifacts < 100:
-                    break
-
-                current_page += 1
-            except Exception as e:
-                self.log.error("Failed to parse CI/CD artifacts: %s", e)
-                raise ValueError("Failed to parse CI/CD artifacts response")
-
-        return all_artifacts
-
-
-    def get_pages(self, owner=None, repo=None):
-        request_url = f"{self.base_url_api}/repos/{owner}/{repo}/pages/builds?per_page=100"
-
-        all_pagebuilds = []
-        current_page = 1
-        while True:
-            request_url_with_page = request_url + f"&page={current_page}"
-            response = requests.get(
-                request_url_with_page,
-                headers=self.http_headers,
-                timeout=10)
-
-            if response.status_code != 200:
-                error_message = f"Failed to get pagebuilds: {request_url_with_page}: {response.text}"
-                raise requests.exceptions.HTTPError(error_message)
-
-            if not response:
-                raise ValueError("No pagebuilds found for %s/%s.",
-                                 owner, repo)
-
-            self.log.debug("Got %d pagebuilds of %s/%s.", len(response.json()),
-                           owner, repo)
-
-            self._check_rate_limit(response.headers)
-
-            count_pagebuilds = len(response.json())
-            all_pagebuilds.extend(response.json())
-
-            if count_pagebuilds < 100:
-                break
-
-            current_page += 1
-
-        return all_pagebuilds
-
-
-    def get_releases(self, owner=None, repo=None):
-        request_url = f"{self.base_url_api}/repos/{owner}/{repo}/releases?per_page=100"
-
-        all_releases = []
-        current_page = 1
-        while True:
-            request_url_with_page = request_url + f"&page={current_page}"
-            response = requests.get(
-                request_url_with_page,
-                headers=self.http_headers,
-                timeout=10)
-
-            if response.status_code != 200:
-                error_message = f"Failed to get releases: {request_url_with_page}: {response.text}"
-                raise requests.exceptions.HTTPError(error_message)
-
-            if not response:
-                raise ValueError("No releases found for %s/%s.",
-                                 owner, repo)
-
-            self.log.debug("Got %d releases of %s/%s.", len(response.json()),
-                           owner, repo)
-
-            self._check_rate_limit(response.headers)
-
-            count_releases = len(response.json())
-            all_releases.extend(response.json())
-
-            if count_releases < 100:
-                break
-
-            current_page += 1
-
-        return all_releases
-
-
-    def get_issue_comments(self, owner=None, repo=None, issue_number=None):
-        request_url = f"{self.base_url_api}/repos/{owner}/{repo}/issues/{issue_number}/comments?per_page=100"
-
-        all_comments = []
-        current_page = 1
-        while True:
-            request_url_with_page = request_url + f"&page={current_page}"
-            response = requests.get(
-                request_url_with_page,
-                headers=self.http_headers,
-                timeout=10)
-
-            if response.status_code != 200:
-                error_message = f"Failed to get comments: {request_url_with_page}: {response.text}"
-                raise requests.exceptions.HTTPError(error_message)
-
-            if not response:
-                raise ValueError("No comments found for %s/%s, issue no. %d.",
-                               owner, repo, issue_number)
-
-            self.log.debug("Got %d comments of issue no. %d of %s/%s.", len(response.json()),
-                           issue_number, owner, repo)
-
-            self._check_rate_limit(response.headers)
-
-            count_comments = len(response.json())
-            all_comments.extend(response.json())
-
-            if count_comments < 100:
-                break
-
-            current_page += 1
-
-        return all_comments
-
-
-    def get_issue_events(self, owner=None, repo=None, issue_number=None):
-        request_url = f"{self.base_url_api}/repos/{owner}/{repo}/issues/{issue_number}/events?per_page=100"
-
-        all_events = []
-        current_page = 1
-        while True:
-            request_url_with_page = request_url + f"&page={current_page}"
-            response = requests.get(
-                request_url_with_page,
-                headers=self.http_headers,
-                timeout=10)
-
-            if response.status_code != 200:
-                error_message = f"Failed to get events: {request_url_with_page}: {response.text}"
-                raise requests.exceptions.HTTPError(error_message)
-
-            if not response:
-                raise ValueError("No events found for %s/%s, issue no. %d.",
-                               owner, repo, issue_number)
-
-            self.log.debug("Got %d events of issue no. %d of %s/%s.", len(response.json()),
-                           issue_number, owner, repo)
-
-            self._check_rate_limit(response.headers)
-
-            events = response.json()
-            count_events = len(events)
-            if count_events > 0:
-                for event in events:
-                    event["issue"] = {"number": issue_number}
-            all_events.extend(events)
-
-            if count_events < 100:
-                break
-
-            current_page += 1
-
-        return all_events
-
-
-    def get_pullrequest_details(self, owner=None, repo=None, issue_number=None):
-        request_url = f"{self.base_url_api}/repos/{owner}/{repo}/pulls/{issue_number}"
-
-        response = requests.get(request_url, headers=self.http_headers, timeout=10)
-
-        if response.status_code != 200:
-            error_message = f"Failed to get pull request details: {request_url}: {response.text}"
-            raise requests.exceptions.HTTPError(error_message)
-
-        if not response:
-            raise ValueError("No pull request details of issue no. %d of %s/%s.",
-                           issue_number, owner, repo)
-
-        self.log.debug("Got pull request details of issue no. %d of %s/%s.", issue_number, owner, repo)
-        self._check_rate_limit(response.headers)
-
-        return response.json()
-
-
-    def get_issues(self, owner=None, repo=None):
-        items         = []
-        total_count   = 0
-        current_page  = 1
-        current_count = 0
-        next_link_pattern = r'(?<=<)([\S]*)(?=>; rel="Next")'
-
-        request_url = f"{self.base_url_api}/repos/{owner}/{repo}/issues?state=all&per_page=100&page={current_page}"
-
-        while True:
-            issues_results = requests.get(
-                request_url,
-                headers=self.http_headers,
-                timeout=10)
-
-            if issues_results.status_code != 200:
-                error_message = f"Failed to get issues: {request_url}: {issues_results.text}"
-                raise requests.exceptions.HTTPError(error_message)
-
-            response_headers  = issues_results.headers
-            issues_results    = issues_results.json()
-            current_count     = len(issues_results)
-            old_total_count   = total_count
-            new_total_count   = old_total_count + current_count
-
-            self._check_rate_limit(response_headers)
-
-            if not issues_results:
-                break
-
-            items.extend(issues_results)
-
-            self.log.debug("Retrieved %d+%d=%d items on the page %d in %s/%s.",
-                           current_count, old_total_count, new_total_count,
-                           current_page, owner, repo)
-
-            total_count = new_total_count
-
-            link_header = response_headers.get("Link")
-            next_link = None
-
-            if link_header:
-                next_link = re.search(next_link_pattern, link_header, re.IGNORECASE)
+            page += 1
 
             if next_link:
-                current_page += 1
-                request_url = next_link.group(0)
-                continue
+                next_link_pattern = r'(?<=<)([\S]*)(?=>; rel="Next")'
+                link_header = response.headers.get("Link")
+                next_link = None
+                if link_header:
+                    next_link = re.search(next_link_pattern, link_header, re.IGNORECASE)
+                if next_link:
+                    found_next_link = True
+                    api_url = next_link.group(0)
+                    continue
+                break
 
-            break
+        self.log.debug("items: %s", items)
+        return items
 
-        return {"provider": "github", "total_count": total_count, "items": items}
+
+    def call_api_repository(self, owner, repo):
+        api_url = f"{self.base_url_api}/repos/{owner}/{repo}"
+        return self._call_api(api_url)
+
+
+    def call_api_issues(self, owner, repo):
+        api_url = f"{self.base_url_api}/repos/{owner}/{repo}/issues?state=all"
+        return self._call_api(api_url, pager=True, page=1, next_link=True)
+
+
+    def call_api_pull_request(self, owner, repo, issue_no):
+        api_url = f"{self.base_url_api}/repos/{owner}/{repo}/pulls/{issue_no}"
+        return self._call_api(api_url)
+
+
+    def call_api_issue_comments(self, owner, repo, issue_no):
+        api_url = f"{self.base_url_api}/repos/{owner}/{repo}/issues/{issue_no}/comments?per_page=100"
+        return self._call_api(api_url, pager=True, page=1, next_link=False)
+
+
+    def call_api_issue_events(self, owner, repo, issue_no):
+        api_url = f"{self.base_url_api}/repos/{owner}/{repo}/issues/{issue_no}/events?per_page=100"
+        return self._call_api(api_url, pager=True, page=1, next_link=False)
+
+
+    def call_api_commit_comments(self, owner, repo):
+        api_url = f"{self.base_url_api}/repos/{owner}/{repo}/comments?per_page=100"
+        return self._call_api(api_url, pager=True, page=1, next_link=False)
+
+
+    def call_api_cicd_artifacts(self, owner, repo):
+        api_url = f"{self.base_url_api}/repos/{owner}/{repo}/actions/artifacts?per_page=100"
+        response = self._call_api(api_url, pager=True, page=1, next_link=False)
+        try:
+            return response[0]["artifacts"]
+        except KeyError:
+            return []
+
+
+    def call_api_cicd_workflows(self, owner, repo):
+        api_url = f"{self.base_url_api}/repos/{owner}/{repo}/actions/workflows?per_page=100"
+        response = self._call_api(api_url, pager=True, page=1, next_link=False)
+        try:
+            return response[0]["workflows"]
+        except KeyError:
+            return []
+
+
+    def call_api_cicd_workflow_runs(self, owner, repo):
+        api_url = f"{self.base_url_api}/repos/{owner}/{repo}/actions/runs?per_page=100"
+        response = self._call_api(api_url, pager=True, page=1, next_link=False)
+        try:
+            return response[0]["workflow_runs"]
+        except KeyError:
+            return []
+
+
+    def call_api_pages(self, owner, repo):
+        api_url = f"{self.base_url_api}/repos/{owner}/{repo}/pages/builds?per_page=100"
+        return self._call_api(api_url, pager=True, page=1, next_link=False)
+
+
+    def call_api_releases(self, owner, repo):
+        api_url = f"{self.base_url_api}/repos/{owner}/{repo}/releases?per_page=100"
+        return self._call_api(api_url, pager=True, page=1, next_link=False)
 
 
     def search_repositories(self, query=None):
@@ -698,46 +473,25 @@ class GithubProvider(GitProviderBase):
         return {"provider": "github", "total_count": total_count, "items": items}
 
 
-    def clone_repositories(self, basedir=None, repos=None):
+    def clone_repository(self, clone_dir, owner, repo_name, retry_count=5) -> None:
         pygit2 = importlib.import_module("pygit2")
+        full_name = f"{owner}/{repo_name}"
 
-        if not basedir:
-            raise ValueError("Base directory is required to clone repositories")
+        if self.checkout == False and os.path.exists(clone_dir):
+            raise ValueError(f"Clone directory already exists: {clone_dir}")
 
-        if not repos:
-            return []
-
-        cloned_repos = []
-        total_repos = len(repos)
-        total_cloned = 0
-
-        for full_name in repos:
-            total_cloned += 1
-
-            # replace / in full_name with _.
-            clonedir = basedir + "/" + full_name.replace("/", "_")
-
-            if os.path.exists(clonedir):
-                self.log.info("(%d/%d) Repo already exists: %s", total_cloned,
-                              total_repos, full_name)
-                cloned_repos.append(full_name)
-                continue
-
-            self.log.info("(%d/%d) Cloning repo: %s", total_cloned, total_repos, full_name)
-
-            # Retry cloning the repo 5 times after 1 min pause for each if it fails.
-            for try_count in range(5):
-                try:
+        # Retry cloning the repo 5 times after 1 min pause for each if it fails.
+        for try_count in range(retry_count):
+            try:
+                if self.checkout:
+                    pygit2.Repository(clone_dir).checkout_head()
+                else:
                     pygit2.clone_repository(self.base_url_clone + "/" + full_name + ".git",
-                                          clonedir)
-                    break
-                except Exception as e:
-                    self.log.error("Failed to clone repo - %s : %s", full_name, e)
-                    self.log.info("Retrying after 1 min... (%d/5)", try_count)
-                    time.sleep(self.wait_sec_clone)
+                                          clone_dir)
+                break
+            except Exception as e:
+                self.log.error("Failed to clone(or checkout) repo - %s : %s", full_name, e)
+                self.log.info("Retrying after 1 min... (%d/5)", try_count)
+                time.sleep(self.interval_clone)
 
-            time.sleep(self.wait_sec_clone)
-
-            cloned_repos.append(full_name)
-
-        return cloned_repos
+        time.sleep(self.interval_clone)

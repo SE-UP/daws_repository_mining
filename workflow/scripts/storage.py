@@ -1,4 +1,5 @@
 """This module contains the Storage class and driver classes for storage"""
+import os
 import sys
 import json
 import pathlib
@@ -32,6 +33,20 @@ class StorageDriverBase(ABC):
     def write(self, path=None, data=None, to_json=False, mode='w'):
         """
         Abstract method to write data to storage.
+        """
+
+
+    @abstractmethod
+    def delete_file(self, path):
+        """
+        Abstract method to delete a file from storage.
+        """
+
+
+    @abstractmethod
+    def exists(self, path) -> bool:
+        """
+        Abstract method to check if the path exists in storage.
         """
 
 
@@ -140,6 +155,24 @@ class FileDriver(StorageDriverBase):
                 f.write(data)
 
 
+    def delete_file(self, path):
+        """
+        Delete a file from storage.
+        """
+        try:
+            os.remove(path)
+        except Exception as e:
+            self.log.error("Error while deleting file: %s: %s", path, e)
+            raise e
+
+
+    def exists(self, path):
+        """
+        Check if the path exists in storage.
+        """
+        return os.path.exists(path)
+
+
 class Storage(StorageDriverBase):
     """
     Storage class to interact with storage using the driver.
@@ -172,8 +205,23 @@ class Storage(StorageDriverBase):
         """
         return self._storage_driver.read(path, from_json, multiple_lines, mode)
 
+
     def write(self, path=None, data=None, to_json=False, mode='w'):
         """
         Write data to storage using the driver.
         """
         return self._storage_driver.write(path, data, to_json, mode)
+
+
+    def delete_file(self, path):
+        """
+        Delete a file from storage using the driver.
+        """
+        return self._storage_driver.delete_file(path)
+
+
+    def exists(self, path):
+        """
+        Check if the path exists in storage using the driver.
+        """
+        return self._storage_driver.exists(path)

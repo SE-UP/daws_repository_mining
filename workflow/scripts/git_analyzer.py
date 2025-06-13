@@ -30,12 +30,11 @@ class GitAnalysis:
         self.commits = dict()
 
 
-    def extract_commits(self, extend_for=""):
+    def extract_commits(self, analysis_for=""):
         """
         Extract information from a given Git repository.
         """
-        self.log.info("Extracting git repo information: %s", self.repo_path)
-        extend_for = extend_for.lower()
+        analysis_for = analysis_for.lower()
 
         try:
             for commit in Repository(self.repo_path, num_workers=16).traverse_commits():
@@ -65,7 +64,7 @@ class GitAnalysis:
                     "dmm_unit_interfacing" : commit.dmm_unit_interfacing # float
                 }
 
-                if extend_for == "snakemake":
+                if analysis_for == "snakemake":
                     commit_info = self._extend_commit_info_for_snakemake(commit_info)
 
                 for file in commit.modified_files:
@@ -91,13 +90,15 @@ class GitAnalysis:
                     if file.change_type.name not in commit_info["change_types"]:
                         commit_info["change_types"].append(file.change_type.name)
 
-                    if extend_for == "snakemake":
+                    if analysis_for == "snakemake":
                         file_info = self._initialize_file_info_for_snakemake(file_info)
+                        # TODO: Refactor this method since calculation is wrong
                         commit_info, file_info = self._extract_commit_for_snakemake(commit_info, file_info, file)
 
                     commit_info["files"].append(file_info)
 
-                if extend_for == "snakemake":
+                if analysis_for == "snakemake":
+                    # TODO: Refactor this method since calculation is wrong
                     commit_info = self._post_process_commit_info_for_snakemake(commit_info)
 
                 if not self.date_first_commit or commit.committer_date < self.date_first_commit:
@@ -540,3 +541,203 @@ class GitAnalysis:
                             continue
 
         return sorted(event_logs, key=lambda x: x["timestamp"])
+
+
+    def extend_repo_info_general(self, repo_info=None, commits=None):
+        """
+        Extend the repository info from API
+        """
+
+        if not repo_info:
+            raise ValueError("'repo_info' is required.")
+
+        if not commits:
+            raise ValueError("'commits' is required.")
+
+        authors = set()
+        committers = set()
+        commit_hashes_sorted_by_epoch = sorted(commits, key=lambda k: commits[k]['committer_epoch'])
+
+        repo_info["first_commit_at_epoch"] = util.now(is_epoch=True)
+        repo_info["last_commit_at_epoch"] = 0
+
+        for commit_hash in commit_hashes_sorted_by_epoch:
+           commit = commits[commit_hash]
+           if "author" in commit:
+               authors.add(commit["author"])
+
+           if "committer" in commit:
+               committers.add(commit["committer"])
+
+           if "committer_epoch" in commit:
+               committer_epoch  = commit["committer_epoch"]
+               if repo_info["first_commit_at_epoch"] > committer_epoch:
+                   repo_info["first_commit_at_epoch"] = committer_epoch
+
+               if repo_info["last_commit_at_epoch"] < committer_epoch:
+                   repo_info["last_commit_at_epoch"] = committer_epoch
+
+        repo_info["first_commit_at"] = util.epoch_to_str(
+            epoch=repo_info["first_commit_at_epoch"],
+            fmt="%Y-%m-%dT%H:%M:%S %z"
+        )
+
+        repo_info["last_commit_at"] = util.epoch_to_str(
+            epoch=repo_info["last_commit_at_epoch"],
+            fmt="%Y-%m-%dT%H:%M:%S %z"
+        )
+
+        repo_info["n_authors"] = len(authors)
+        repo_info["n_committers"] = len(committers)
+
+        return repo_info
+
+
+    def extend_repo_info_for_snakemake(self, repo_info=None, commits=None):
+        if not repo_info:
+            raise ValueError("'repo_info' is required.")
+
+        if not commits:
+            raise ValueError("'commits' is required.")
+
+        repo_info["n_commits_snakemake_related"] = 0
+        repo_info["n_evolution_cycles"] = 0
+        repo_info["evolution_cycles"] = []
+
+        cycle_begin = {}
+        cycle_end = {}
+        cycle_n_commits = 0
+        cycle_n_commits_snakemake_related = 0
+        cycle_n_snakemake_rules_added = 0
+        cycle_n_snakemake_rules_removed = 0
+        cycle_n_snakemake_modules_added = 0
+        cycle_n_snakemake_modules_removed = 0
+        cycle_n_snakemake_rules_added_on_the_day = 0
+        cycle_n_snakemake_rules_removed_on_the_day = 0
+        cycle_n_snakemake_modules_added_on_the_day = 0
+        cycle_n_snakemake_modules_removed_on_the_day = 0
+        is_last_commit_of_the_day = False
+
+        file_extensions = []
+        commit_hashes_sorted_by_epoch = sorted(commits, key=lambda k: commits[k]['committer_epoch'])
+        for i_commit, commit_hash in enumerate(commit_hashes_sorted_by_epoch):
+           commit = commits[commit_hash]
+
+           cycle_n_commits += 1
+           if "snakemake_related" in commit and commit["snakemake_related"]:
+               repo_info["n_commits_snakemake_related"] += 1
+
+           cycle_current = {
+               "hash": commit_hash,
+               "epoch": commit["committer_epoch"],
+           }
+
+           if cycle_begin == {}:
+               cycle_begin = cycle_current
+               if cycle_end == {}:
+                   cycle_n_commits = 1
+               else:
+                   cycle_n_commits = 0
+           else:
+               cycle_end = cycle_current
+               if "snakemake_related" in commit and commit["snakemake_related"]:
+                   cycle_n_commits_snakemake_related += 1
+
+               added_or_removed = (
+                   commit["snakemake_n_rules_added"] -
+                   commit["snakemake_n_rules_removed"] or
+                   commit["snakemake_n_modules_added"] -
+                   commit["snakemake_n_modules_removed"]
+               )
+
+               if added_or_removed or is_last_commit_of_the_day:
+                   diff_days = None
+                   diff_mins = None
+                   diff_hours = None
+                   begin_epoch = cycle_begin["epoch"]
+                   end_epoch   = cycle_end["epoch"]
+                   if begin_epoch and end_epoch:
+                       diff_days = util.convert_seconds(end_epoch - begin_epoch, unit="d")
+                       diff_mins = util.convert_seconds(end_epoch - begin_epoch, unit="m")
+                       diff_hours = util.convert_seconds(end_epoch - begin_epoch, unit="h")
+                   else:
+                       raise ValueError("Invalid epoch values for cycle begin and end.")
+
+                   # Check if the next commit is within 24 hours
+                   if i_commit + 1 < len(commits):
+                       next_commit_hash = commit_hashes_sorted_by_epoch[i_commit + 1]
+                       next_commit_epoch = commits[next_commit_hash]["committer_epoch"]
+                       next_diff_days = util.convert_seconds(next_commit_epoch - end_epoch, unit="d")
+                       if next_diff_days == 0:
+                           cycle_n_snakemake_rules_added_on_the_day += commit["snakemake_n_rules_added"]
+                           cycle_n_snakemake_rules_removed_on_the_day += commit["snakemake_n_rules_removed"]
+                           cycle_n_snakemake_modules_added_on_the_day += commit["snakemake_n_modules_added"]
+                           cycle_n_snakemake_modules_removed_on_the_day += commit["snakemake_n_modules_removed"]
+                           if "file_extensions" in commit:
+                               file_extensions += commit["file_extensions"]
+
+                           is_last_commit_of_the_day = True
+                           continue
+
+                   repo_info["n_evolution_cycles"] += 1
+                   cycle_n_snakemake_rules_added = commit["snakemake_n_rules_added"] + cycle_n_snakemake_rules_added_on_the_day
+                   cycle_n_snakemake_rules_removed = commit["snakemake_n_rules_removed"] + cycle_n_snakemake_rules_removed_on_the_day
+                   cycle_n_snakemake_modules_added = commit["snakemake_n_modules_added"] + cycle_n_snakemake_modules_added_on_the_day
+                   cycle_n_snakemake_modules_removed = commit["snakemake_n_modules_removed"] + cycle_n_snakemake_modules_removed_on_the_day
+                   if "file_extensions" in commit:
+                       file_extensions += commit["file_extensions"]
+
+                   repo_info["evolution_cycles"].append({
+                       "begin": cycle_begin,
+                       "end": cycle_end,
+                       "diff_days": diff_days,
+                       "diff_mins": diff_mins,
+                       "diff_hours": diff_hours,
+                       "n_commits": cycle_n_commits,
+                       "n_commits_snakemake_related": cycle_n_commits_snakemake_related,
+                       "n_snakemake_rules_added": cycle_n_snakemake_rules_added,
+                       "n_snakemake_rules_removed": cycle_n_snakemake_rules_removed,
+                       "n_snakemake_modules_added": cycle_n_snakemake_modules_added,
+                       "n_snakemake_modules_removed": cycle_n_snakemake_modules_removed,
+                       "file_extensions": list(set(file_extensions)),
+                   })
+
+                   cycle_begin = cycle_end
+                   cycle_n_commits_snakemake_related = 0
+                   cycle_n_commits = 0
+                   cycle_n_snakemake_rules_added = 0
+                   cycle_n_snakemake_rules_removed = 0
+                   cycle_n_snakemake_modules_added = 0
+                   cycle_n_snakemake_modules_removed = 0
+                   cycle_n_snakemake_rules_added_on_the_day = 0
+                   cycle_n_snakemake_rules_removed_on_the_day = 0
+                   cycle_n_snakemake_modules_added_on_the_day = 0
+                   cycle_n_snakemake_modules_removed_on_the_day = 0
+                   is_last_commit_of_the_day = False
+                   file_extensions = []
+
+        # Store leftover cycle
+        if cycle_begin != {} and cycle_end != {} and cycle_begin != cycle_end:
+            repo_info["n_evolution_cycles"] += 1
+            begin_epoch = cycle_begin["epoch"]
+            end_epoch   = cycle_end["epoch"]
+            diff_days = util.convert_seconds(end_epoch - begin_epoch, unit="d")
+            diff_mins = util.convert_seconds(end_epoch - begin_epoch, unit="m")
+            diff_hours = util.convert_seconds(end_epoch - begin_epoch, unit="h")
+
+            repo_info["evolution_cycles"].append({
+                "begin": cycle_begin,
+                "end": cycle_end,
+                "diff_days": diff_days,
+                "diff_mins": diff_mins,
+                "diff_hours": diff_hours,
+                "n_commits": cycle_n_commits,
+                "n_commits_snakemake_related": cycle_n_commits_snakemake_related,
+                "n_snakemake_rules_added": cycle_n_snakemake_rules_added,
+                "n_snakemake_rules_removed": cycle_n_snakemake_rules_removed,
+                "n_snakemake_modules_added": cycle_n_snakemake_modules_added,
+                "n_snakemake_modules_removed": cycle_n_snakemake_modules_removed,
+                "file_extensions": list(set(file_extensions)),
+            })
+
+        return repo_info
